@@ -1,7 +1,6 @@
-#![feature(concat_idents)]
-
 mod matrix;
 mod par_ptr_wrapper;
+mod elementwise_unary_ops;
 mod elementwise_binary_ops;
 mod reduction_ops;
 mod blas_bind;

@@ -32,8 +32,7 @@ mod tests {
   #[test]
   fn test_norm() {
     let buff = (0..10000).map(|x| x as f64).collect::<Vec<_>>();
-    let m: Matrix<_, _> = buff.as_slice().into();
-    let m = m.reshape(20, 500).unwrap();
+    let m = Matrix::from_slice(&buff, 20, 500).unwrap();
     let m_norm_2_pow_2 = m.norm_n_pow_n(2);
     let true_m_norm_2_pow_2: f64 = buff.into_iter().map(|x| x.abs().powi(2)).sum();
     assert_eq!(m_norm_2_pow_2, true_m_norm_2_pow_2);

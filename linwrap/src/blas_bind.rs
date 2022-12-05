@@ -1,4 +1,4 @@
-extern crate blis_src;
+extern crate blas_src;
 
 use std::ffi::{
   c_char,
@@ -12,17 +12,17 @@ macro_rules! gemm {
     pub(super) fn $fn_name(
       transa: *const c_char,
       transb: *const c_char,
-      m: *const c_int,
-      n: *const c_int,
-      k: *const c_int,
-      alpha: *const $type_name,
-      a: *const $type_name,
-      lda: *const c_int,
-      b: *const $type_name,
-      ldb: *const c_int,
-      beta: *const $type_name,
-      c: *mut $type_name,
-      ldc: *const c_int,
+      m:      *const c_int,
+      n:      *const c_int,
+      k:      *const c_int,
+      alpha:  *const $type_name,
+      a:      *const $type_name,
+      lda:    *const c_int,
+      b:      *const $type_name,
+      ldb:    *const c_int,
+      beta:   *const $type_name,
+      c:      *mut   $type_name,
+      ldc:    *const c_int,
     );
   };
 }

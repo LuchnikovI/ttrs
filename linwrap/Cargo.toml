@@ -9,8 +9,8 @@ rayon = "1.6.0"
 rawpointer = "0.2.1"
 rand = "0.8.5"
 rand_distr = "0.4.3"
-#blis-src = "0.2.1"
 blas-src = { version = "0.8", features = ["blis"] }
+lapack-src = { version = "0.8", features = ["openblas"] }
 
 [dev-dependencies]
 ndarray = "0.15.6"
