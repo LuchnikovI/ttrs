@@ -28,6 +28,7 @@ pub enum MatrixError {
   IncorrectShape,
   LapackError(c_int),
   FortranLayoutRequired,
+  MutableElementsOverlapping,
 }
 
 pub type MatrixResult<T> = Result<T, MatrixError>;
@@ -155,6 +156,14 @@ where
     (0..(nrows * ncols)).into_par_iter().map(move |i|{
       unsafe { ptr.add((i / nrows) * stride2 + (i % nrows) * stride1).deref_mut() }
     })
+  }
+
+  pub fn gen_buffer<'a, T>(&self) -> Vec<T>
+  where
+    Ptr: PointerExtWithDerefAndSend<'a, Target = T>,
+    T: Send + Sync + Copy + 'a,
+  {
+    self.into_par_iter().map(|x| *x).collect()
   }
 }
 

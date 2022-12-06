@@ -58,3 +58,50 @@ extern "C" {
   gesvd!(cgesvd_, f32, Complex32);
   gesvd!(zgesvd_, f64, Complex64);
 }
+
+macro_rules! geqrf {
+    ($fn_name:ident, $type_name:ident) => {
+      pub(super) fn $fn_name(
+        m:     *const c_int,
+        n:     *const c_int,
+        a:     *mut   $type_name,
+        lda:   *const c_int,
+        tau:   *mut   $type_name,
+        work:  *mut   $type_name,
+        lwork: *const c_int,
+        info:  *mut   c_int,
+      );
+    };
+}
+
+extern "C" {
+  geqrf!(sgeqrf_, f32      );
+  geqrf!(dgeqrf_, f64      );
+  geqrf!(cgeqrf_, Complex32);
+  geqrf!(zgeqrf_, Complex64);
+}
+
+macro_rules! ungqr {
+  ($fn_name:ident, $type_name:ident) => {
+    pub(super) fn $fn_name
+    (
+      m:     *const c_int,
+      n:     *const c_int,
+      k:     *const c_int,
+      a:     *mut   $type_name,
+      lda:   *const c_int,
+      tau:   *mut   $type_name,
+      work:  *mut   $type_name,
+      lwork: *const c_int,
+      info:  *mut   c_int,
+    );
+  };
+}
+
+extern "C" {
+  ungqr!(cungqr_, Complex32);
+  ungqr!(zungqr_, Complex64);
+  ungqr!(dorgqr_, f64);
+  ungqr!(sorgqr_, f32);
+}
+

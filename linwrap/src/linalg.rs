@@ -14,6 +14,7 @@ use crate::{
     MatrixError,
     MatrixResult,
   },
+  linalg_utils::triangular_split,
 };
 
 // TODO: get advantage of the generalized storage (arbitrary strides).
@@ -22,6 +23,8 @@ use crate::par_ptr_wrapper::PointerExtWithDerefAndSend;
 use crate::blas_bind::{sgemm_, dgemm_, cgemm_, zgemm_};
 use crate::lapack_bind::{sgesv_, dgesv_, cgesv_, zgesv_};
 use crate::lapack_bind::{sgesvd_, dgesvd_, cgesvd_, zgesvd_};
+use crate::lapack_bind::{sgeqrf_, dgeqrf_, cgeqrf_, zgeqrf_};
+use crate::lapack_bind::{sorgqr_, dorgqr_, cungqr_, zungqr_};
 
 macro_rules! impl_matmul {
   ($fn_name:ident, $type_name:ident, $alpha:expr, $beta:expr) => {
@@ -39,6 +42,7 @@ macro_rules! impl_matmul {
         Ptr2: PointerExtWithDerefAndSend<'a, Target = $type_name>,
       {
         if self.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
+        if self.stride2 < self.nrows { return Err(MatrixError::MutableElementsOverlapping); }
         if a.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
         if b.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
         let (m, k) = if is_a_transposed {
@@ -86,7 +90,9 @@ macro_rules! impl_solve {
       ) -> MatrixResult<()>
         {
           if self.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
+          if self.stride2 < self.nrows { return Err(MatrixError::MutableElementsOverlapping); }
           if rhs.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
+          if rhs.stride2 < rhs.nrows { return Err(MatrixError::MutableElementsOverlapping); }
           if self.ncols != self.nrows { return Err(MatrixError::IncorrectShape); }
           let n = self.ncols as c_int;
           if rhs.nrows as c_int != n { return Err(MatrixError::IncorrectShape); }
@@ -131,8 +137,11 @@ macro_rules! impl_svd {
       ) -> MatrixResult<Vec<$type_name>>
       {
         if self.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
+        if self.stride2 < self.nrows { return Err(MatrixError::MutableElementsOverlapping); }
         if u.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
+        if u.stride2 < u.nrows { return Err(MatrixError::MutableElementsOverlapping); }
         if vdag.stride1 != 1 { return Err(MatrixError::FortranLayoutRequired); }
+        if vdag.stride2 < vdag.nrows { return Err(MatrixError::MutableElementsOverlapping); }
         let jobu = 'S' as c_char;
         let jobvt = 'S' as c_char;
         let m = self.nrows as c_int;
@@ -197,6 +206,134 @@ impl_svd!(dgesvd_, f64, f64      , 0.                    , |x| x              );
 impl_svd!(cgesvd_, f32, Complex32, Complex32::new(0., 0.), |x: Complex32| x.re);
 impl_svd!(zgesvd_, f64, Complex64, Complex64::new(0., 0.), |x: Complex64| x.re);
 
+macro_rules! impl_householder {
+  ($fn_name:ident, $type_name:ident, $complex_zero:expr, $complex_to_real_fn:expr) => {
+    impl Matrix<*mut $type_name, &mut [$type_name]> {
+      unsafe fn householder_(&mut self, tau: *mut $type_name) -> MatrixResult<()> {
+        let m = self.nrows as c_int;
+        let n = self.ncols as c_int;
+        let lda = self.stride2 as c_int;
+        let mut work = $complex_zero;
+        let lwork = -1 as c_int;
+        let mut info: c_int = 0;
+        $fn_name(
+          &m,
+          &n,
+          self.ptr,
+          &lda,
+          tau,
+          &mut work,
+          &lwork,
+          &mut info,
+        );
+        let lwork = $complex_to_real_fn(work) as c_int;
+        let mut work_buff: Vec<$type_name> = Vec::with_capacity(lwork as usize);
+        unsafe { work_buff.set_len(lwork as usize); }
+        let work = work_buff.as_mut_ptr();
+        $fn_name(
+          &m,
+          &n,
+          self.ptr,
+          &lda,
+          tau,
+          work,
+          &lwork,
+          &mut info,
+        );
+        if info != 0 { return Err(MatrixError::LapackError(info)); }
+        Ok(())
+      }
+    }
+  };
+}
+
+impl_householder!(sgeqrf_, f32,       0.,                   |x| x              );
+impl_householder!(dgeqrf_, f64,       0.,                   |x| x              );
+impl_householder!(cgeqrf_, Complex32, Complex::new(0., 0.), |x: Complex32| x.re);
+impl_householder!(zgeqrf_, Complex64, Complex::new(0., 0.), |x: Complex64| x.re);
+
+macro_rules! impl_householder_to_q {
+  ($fn_name:ident, $type_name:ident, $complex_zero:expr, $complex_to_real_fn:expr) => {
+    impl Matrix<*mut $type_name, &mut [$type_name]> {
+      unsafe fn householder_to_q_(&mut self, tau: *mut $type_name) -> MatrixResult<()> {
+        let m = self.nrows as c_int;
+        let n = self.ncols as c_int;
+        let k = std::cmp::min(m, n);
+        let lda = self.stride2 as c_int;
+        let mut work = $complex_zero;
+        let lwork = -1 as c_int;
+        let mut info: c_int = 0;
+        $fn_name(
+          &m,
+          &n,
+          &k,
+          self.ptr,
+          &lda,
+          tau,
+          &mut work,
+          &lwork,
+          &mut info,
+        );
+        let lwork = $complex_to_real_fn(work) as c_int;
+        let mut work_buff: Vec<$type_name> = Vec::with_capacity(lwork as usize);
+        unsafe { work_buff.set_len(lwork as usize); }
+        let work = work_buff.as_mut_ptr();
+        $fn_name(
+          &m,
+          &n,
+          &k,
+          self.ptr,
+          &lda,
+          tau,
+          work,
+          &lwork,
+          &mut info,
+        );
+        if info != 0 { return Err(MatrixError::LapackError(info)); }
+        Ok(())
+      }
+    } 
+  };
+}
+
+impl_householder_to_q!(sorgqr_, f32,       0.,                     |x| x              );
+impl_householder_to_q!(dorgqr_, f64,       0.,                     |x| x              );
+impl_householder_to_q!(cungqr_, Complex32, Complex32::new(0., 0.), |x: Complex32| x.re);
+impl_householder_to_q!(zungqr_, Complex64, Complex64::new(0., 0.), |x: Complex64| x.re);
+
+macro_rules! impl_qr {
+  ($type_name:ident) => {
+    impl Matrix<*mut $type_name, &mut [$type_name]> {
+      pub fn qr(
+        &mut self,
+        other: &mut Self,
+      ) -> MatrixResult<()>
+      {
+        let m = self.nrows;
+        let n = self.ncols;
+        let min_dim = std::cmp::min(n, m);
+        if other.ncols != min_dim { return Err(MatrixError::IncorrectShape); }
+        if other.nrows != min_dim { return Err(MatrixError::IncorrectShape); }
+        let mut tau = Vec::with_capacity(min_dim);
+        unsafe { tau.set_len(min_dim); }
+        unsafe { self.householder_(tau.as_mut_ptr())?; }
+        unsafe { triangular_split(self, other); }
+        if m > n {
+          unsafe { self.householder_to_q_(tau.as_mut_ptr())?; }
+        } else {
+          unsafe { other.householder_to_q_(tau.as_mut_ptr())?; }
+        }
+        Ok(())
+      }
+    }
+  };
+}
+
+impl_qr!(f32      );
+impl_qr!(f64      );
+impl_qr!(Complex32);
+impl_qr!(Complex64);
+
 // ---------------------------------------------------------------------- //
 
 #[cfg(test)]
@@ -206,11 +343,15 @@ mod tests {
     Complex32,
   };
   use crate::Matrix;
-  use crate::par_utils::{
-    gen_random_normal_buff_c128,
-    gen_random_normal_buff_c64,
-    gen_random_normal_buff_f32,
-    gen_random_normal_buff_f64,
+  use crate::init_utils::{
+    random_normal_f32,
+    random_normal_f64,
+    random_normal_c32,
+    random_normal_c64,
+    eye_f32,
+    eye_f64,
+    eye_c32,
+    eye_c64,
   };
   use ndarray::Array;
   use ndarray_einsum_beta::einsum;
@@ -240,22 +381,22 @@ mod tests {
 
   #[test]
   fn test_matmul_inplace() {
-    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, f32,       gen_random_normal_buff_f32 );
-    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, f64,       gen_random_normal_buff_f64 );
-    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, Complex32, gen_random_normal_buff_c64 );
-    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, Complex64, gen_random_normal_buff_c128);
-    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  f32,       gen_random_normal_buff_f32 );
-    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  f64,       gen_random_normal_buff_f64 );
-    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  Complex32, gen_random_normal_buff_c64 );
-    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  Complex64, gen_random_normal_buff_c128);
-    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, f32,       gen_random_normal_buff_f32 );
-    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, f64,       gen_random_normal_buff_f64 );
-    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, Complex32, gen_random_normal_buff_c64 );
-    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, Complex64, gen_random_normal_buff_c128);
-    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  f32,       gen_random_normal_buff_f32 );
-    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  f64,       gen_random_normal_buff_f64 );
-    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  Complex32, gen_random_normal_buff_c64 );
-    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  Complex64, gen_random_normal_buff_c128);
+    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, f32,       random_normal_f32 );
+    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, f64,       random_normal_f64 );
+    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, Complex32, random_normal_c32 );
+    test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, Complex64, random_normal_c64);
+    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  f32,       random_normal_f32 );
+    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  f64,       random_normal_f64 );
+    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  Complex32, random_normal_c32 );
+    test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  Complex64, random_normal_c64);
+    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, f32,       random_normal_f32 );
+    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, f64,       random_normal_f64 );
+    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, Complex32, random_normal_c32 );
+    test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, Complex64, random_normal_c64);
+    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  f32,       random_normal_f32 );
+    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  f64,       random_normal_f64 );
+    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  Complex32, random_normal_c32 );
+    test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  Complex64, random_normal_c64);
   }
 
   macro_rules! test_solve {
@@ -278,10 +419,10 @@ mod tests {
 
   #[test]
   fn test_inv() {
-    test_solve!((10, 15), f32,       gen_random_normal_buff_f32 );
-    test_solve!((10, 15), f64,       gen_random_normal_buff_f64 );
-    test_solve!((10, 15), Complex32, gen_random_normal_buff_c64 );
-    test_solve!((10, 15), Complex64, gen_random_normal_buff_c128);
+    test_solve!((10, 15), f32,       random_normal_f32 );
+    test_solve!((10, 15), f64,       random_normal_f64 );
+    test_solve!((10, 15), Complex32, random_normal_c32 );
+    test_solve!((10, 15), Complex64, random_normal_c64);
   }
 
   macro_rules! test_svd {
@@ -339,13 +480,57 @@ mod tests {
 
   #[test]
   fn test_svd() {
-    test_svd!((10, 15), gen_random_normal_buff_f32,  |x, _| x as f32            );
-    test_svd!((10, 15), gen_random_normal_buff_f64,  |x, _| x as f64            );
-    test_svd!((10, 15), gen_random_normal_buff_c64,  |x, y| Complex32::new(x, y));
-    test_svd!((10, 15), gen_random_normal_buff_c128, |x, y| Complex64::new(x, y));
-    test_svd!((15, 10), gen_random_normal_buff_f32,  |x, _| x as f32            );
-    test_svd!((15, 10), gen_random_normal_buff_f64,  |x, _| x as f64            );
-    test_svd!((15, 10), gen_random_normal_buff_c64,  |x, y| Complex32::new(x, y));
-    test_svd!((15, 10), gen_random_normal_buff_c128, |x, y| Complex64::new(x, y));
+    test_svd!((10, 15), random_normal_f32,  |x, _| x as f32            );
+    test_svd!((10, 15), random_normal_f64,  |x, _| x as f64            );
+    test_svd!((10, 15), random_normal_c32,  |x, y| Complex32::new(x, y));
+    test_svd!((10, 15), random_normal_c64, |x, y| Complex64::new(x, y));
+    test_svd!((15, 10), random_normal_f32,  |x, _| x as f32            );
+    test_svd!((15, 10), random_normal_f64,  |x, _| x as f64            );
+    test_svd!((15, 10), random_normal_c32,  |x, y| Complex32::new(x, y));
+    test_svd!((15, 10), random_normal_c64, |x, y| Complex64::new(x, y));
+  }
+
+  macro_rules! test_qr {
+    ($sizes:expr, $gen_fn:ident, $eye_fn:ident) => {
+      let (m, n) = $sizes;
+      let min_dim = std::cmp::min(m, n);
+      let mut buff_a = $gen_fn(m * n);
+      let buff_a_copy = buff_a.clone();
+      let mut a = Matrix::from_mut_slice(&mut buff_a, m, n).unwrap();
+      let a_copy = Matrix::from_slice(&buff_a_copy, m, n).unwrap();
+      let mut buff_other = $gen_fn(min_dim * min_dim);
+      let mut other = Matrix::from_mut_slice(&mut buff_other, min_dim, min_dim).unwrap();
+      a.qr(&mut other).unwrap();
+      let (q, r) = if m > n { (a, other) } else { (other, a) };
+      // Here we check the isometric property of q;
+      let eye_buff = $eye_fn(min_dim);
+      let eye = Matrix::from_slice(&eye_buff, min_dim, min_dim).unwrap();
+      let mut buff_q_dag = q.gen_buffer();
+      let mut q_dag = Matrix::from_mut_slice(&mut buff_q_dag, m, min_dim).unwrap();
+      q_dag.conj();
+      let mut buff_result = $gen_fn(min_dim * min_dim);
+      let mut result = Matrix::from_mut_slice(&mut buff_result, min_dim, min_dim).unwrap();
+      result.matmul_inplace(&q_dag, &q, true, false).unwrap();
+      result.sub(eye).unwrap();
+      assert!(result.norm_n_pow_n(2) < 1e-5);
+      // Here we check the correctness of the decomposition
+      let mut result_buff = $gen_fn(m * n);
+      let mut result = Matrix::from_mut_slice(&mut result_buff, m, n).unwrap();
+      result.matmul_inplace(&q, &r, false, false).unwrap();
+      result.sub(a_copy).unwrap();
+      assert!(result.norm_n_pow_n(2) < 1e-5);
+    };
+  }
+
+  #[test]
+  fn test_qr() {
+    test_qr!((5, 10), random_normal_f32, eye_f32);
+    test_qr!((5, 10), random_normal_f64, eye_f64);
+    test_qr!((5, 10), random_normal_c32, eye_c32);
+    test_qr!((5, 10), random_normal_c64, eye_c64);
+    test_qr!((10, 5), random_normal_f32, eye_f32);
+    test_qr!((10, 5), random_normal_f64, eye_f64);
+    test_qr!((10, 5), random_normal_c32, eye_c32);
+    test_qr!((10, 5), random_normal_c64, eye_c64);
   }
 }

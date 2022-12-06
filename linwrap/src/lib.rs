@@ -6,5 +6,6 @@ mod reduction_ops;
 mod blas_bind;
 mod linalg;
 mod lapack_bind;
-pub mod par_utils;
+mod linalg_utils;
+pub mod init_utils;
 pub use matrix::Matrix;
