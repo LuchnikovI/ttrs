@@ -1,5 +1,5 @@
-mod matrix;
 mod par_ptr_wrapper;
+mod matrix;
 mod elementwise_unary_ops;
 mod elementwise_binary_ops;
 mod reduction_ops;

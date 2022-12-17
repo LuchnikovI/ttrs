@@ -33,3 +33,26 @@ extern "C" {
   gemm!(cgemm_, Complex32);
   gemm!(zgemm_, Complex64);
 }
+
+macro_rules! ger {
+  ($fn_name:ident, $type_name:ident) => {
+    pub(super) fn $fn_name(
+      m:     *const c_int,
+      n:     *const c_int,
+      alpha: *const $type_name,
+      x:     *const $type_name,
+      incx:  *const c_int,
+      y:     *const $type_name,
+      incy:  *const c_int,
+      a:     *mut   $type_name,
+      lda:   *const c_int,
+    );
+  };
+}
+
+extern "C" {
+  ger!(sger_,  f32      );
+  ger!(dger_,  f64      );
+  ger!(cgeru_, Complex32);
+  ger!(zgeru_, Complex64);
+}

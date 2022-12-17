@@ -1,10 +1,10 @@
 use rawpointer::PointerExt;
 
 #[derive(Clone, Copy)]
-pub struct ParPtrWrapper<T: PointerExt + Clone + Copy> (T);
+pub struct ParPtrWrapper<T> (pub T);
 
-unsafe impl<T: PointerExt + Clone + Copy> Send for ParPtrWrapper<T> {}
-unsafe impl<T: PointerExt + Clone + Copy> Sync for ParPtrWrapper<T> {}
+unsafe impl<T> Send for ParPtrWrapper<T> {}
+unsafe impl<T> Sync for ParPtrWrapper<T> {}
 
 impl<T: PointerExt + Clone + Copy> PointerExt for ParPtrWrapper<T> {
   #[inline(always)]
@@ -46,59 +46,5 @@ impl<T: PointerExt + Clone + Copy> PointerExt for ParPtrWrapper<T> {
   #[inline(always)]
   unsafe fn sub(self, i: usize) -> Self {
       Self(self.0.sub(i))
-  }
-}
-
-pub trait PointerExtWithDerefAndSend<'a>: PointerExt {
-  type Target;
-  unsafe fn deref(self) -> &'a Self::Target;
-  fn wrap(self) -> ParPtrWrapper<Self>;
-}
-
-pub trait PointerExtWithDerefMutAndSend<'a>: PointerExtWithDerefAndSend<'a> {
-  unsafe fn deref_mut(self) -> &'a mut Self::Target;
-}
-
-impl<'a, T> PointerExtWithDerefAndSend<'a> for *const T
-{
-  type Target = T;
-  #[inline(always)]
-  unsafe fn deref(self) -> &'a Self::Target {
-      &*self
-  }
-  fn wrap(self) -> ParPtrWrapper<Self> {
-    ParPtrWrapper(self)
-  }
-}
-
-impl<'a, T> PointerExtWithDerefAndSend<'a> for *mut T 
-{
-  type Target = T;
-  #[inline(always)]
-  unsafe fn deref(self) -> &'a Self::Target {
-      &*self
-  }
-  fn wrap(self) -> ParPtrWrapper<Self> {
-    ParPtrWrapper(self)
-  }
-}
-
-impl<'a, T> PointerExtWithDerefMutAndSend<'a> for *mut T 
-{
-  #[inline(always)]
-  unsafe fn deref_mut(self) -> &'a mut Self::Target {
-      &mut *self
-  }
-}
-
-impl<'a, T: PointerExtWithDerefAndSend<'a> + Clone + Copy> ParPtrWrapper<T> {
-  pub unsafe fn deref(&self) -> &'a T::Target {
-    self.0.deref()
-  }
-}
-
-impl<'a, T: PointerExtWithDerefMutAndSend<'a> + Clone + Copy> ParPtrWrapper<T> {
-  pub unsafe fn deref_mut(&mut self) -> &'a mut T::Target {
-    self.0.deref_mut()
   }
 }

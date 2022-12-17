@@ -1,4 +1,8 @@
-use std::time::Instant;
+
+fn main() {
+  
+}
+/*use std::time::Instant;
 
 use linwrap::{
   Matrix,
@@ -37,4 +41,4 @@ fn main() {
   let _ = m2.norm_n_pow_n(2);
   let duration = start.elapsed();
   println!("Calculation of the L2 norm of a complex64 matrix of size {}x{} takes: {} secs;", m, k, duration.as_nanos() as f64 / 1e9);
-}
+}*/
