@@ -169,8 +169,20 @@ macro_rules! impl_with_deref {
         self.into_par_iter().map(|x| *x.0).collect()
       }
 
-      pub unsafe fn write_to(self, other: Matrix<*mut T>) -> MatrixResult<()>
+      pub unsafe fn write_to(
+        self,
+        mut other: Matrix<*mut T>,
+        is_transposed: bool,
+      ) -> MatrixResult<()>
       {
+        if is_transposed {
+          let mut tmp = other.ncols;
+          other.ncols = other.nrows;
+          other.nrows = tmp;
+          tmp = other.stride1;
+          other.stride1 = other.stride2;
+          other.stride2 = tmp;
+        }
         if (other.ncols != self.ncols) || (other.nrows != self.nrows) { return Err(MatrixError::IncorrectShape); }
         (other.into_par_iter(), self.into_par_iter()).into_par_iter().for_each(|(dst, src)| { *dst.0 = *src.0; });
         Ok(())
@@ -209,18 +221,39 @@ macro_rules! impl_with_deref {
         Ok(ptr)
       }
 
-      pub unsafe fn gen_from_cols_order(self, order: &[usize]) -> Vec<T>
+      pub unsafe fn gen_from_cols_order(self, order: &[usize], is_transposed: bool) -> Vec<T>
       {
-        let ncols = order.len();
-        let mut buff: Vec<T> = Vec::with_capacity(ncols * self.nrows);
-        buff.set_len(ncols * self.nrows);
+        let cols_num = order.len();
+        let output_stride1 = if is_transposed { cols_num } else { 1 };
+        let output_stride2 = if is_transposed { 1 } else { self.nrows };
+        let mut buff: Vec<T> = Vec::with_capacity(cols_num * self.nrows);
+        buff.set_len(cols_num * self.nrows);
         let output_matrix_ptr = ParPtrWrapper(buff.as_mut_ptr());
         let input_matrix_ptr = ParPtrWrapper(self.ptr);
-        order.into_par_iter().zip(0..ncols).for_each(|(o, i)| {
-          let output_col_ptr = output_matrix_ptr.add(i * self.nrows);
-          let input_col_ptr = input_matrix_ptr.add(o * self.nrows);
+        order.into_par_iter().zip(0..cols_num).for_each(|(o, i)| {
+          let output_col_ptr = output_matrix_ptr.add(i * output_stride2);
+          let input_col_ptr = input_matrix_ptr.add(o * self.stride2);
           for j in 0..self.nrows {
-            *output_col_ptr.add(j).0 = *input_col_ptr.add(j).0;
+            *output_col_ptr.add(j * output_stride1).0 = *input_col_ptr.add(j * self.stride1).0;
+          }
+        });
+        buff
+      }
+
+      pub unsafe fn gen_from_rows_order(self, order: &[usize], is_transposed: bool) -> Vec<T>
+      {
+        let rows_num = order.len();
+        let output_stride1 = if is_transposed { self.ncols } else { 1 };
+        let output_stride2 = if is_transposed { 1 } else { rows_num };
+        let mut buff: Vec<T> = Vec::with_capacity(rows_num * self.ncols);
+        buff.set_len(rows_num * self.ncols);
+        let output_matrix_ptr = ParPtrWrapper(buff.as_mut_ptr());
+        let input_matrix_ptr = ParPtrWrapper(self.ptr);
+        order.into_par_iter().zip(0..rows_num).for_each(|(o, i)| {
+          let output_row_ptr = output_matrix_ptr.add(i * output_stride1);
+          let input_row_ptr = input_matrix_ptr.add(o * self.stride1);
+          for j in 0..self.ncols {
+            *output_row_ptr.add(j * output_stride2).0 = *input_row_ptr.add(j * self.stride2).0;
           }
         });
         buff
@@ -313,7 +346,7 @@ mod tests {
   fn test_gen_from_cols_order() {
     let buff = (0..256).collect::<Vec<i32>>();
     let m = Matrix::from_slice(&buff, 8, 32).unwrap();
-    let new_buff = unsafe { m.gen_from_cols_order(&[5, 2, 8, 1, 0, 4]) };
+    let new_buff = unsafe { m.gen_from_cols_order(&[5, 2, 8, 1, 0, 4], false) };
     let true_new_buff = [
       40, 41, 42, 43, 44, 45, 46, 47,
       16, 17, 18, 19, 20, 21, 22, 23,
@@ -321,6 +354,45 @@ mod tests {
        8,  9, 10, 11, 12, 13, 14, 15,
        0,  1,  2,  3,  4,  5,  6,  7,
       32, 33, 34, 35, 36, 37, 38, 39,
+    ];
+    assert_eq!(&true_new_buff[..], &new_buff[..]);
+    let new_buff = unsafe { m.gen_from_cols_order(&[5, 2, 8, 1, 0, 4], true) };
+    let true_new_buff = [
+      40, 16, 64,  8,  0, 32,
+      41, 17, 65,  9,  1, 33,
+      42, 18, 66, 10,  2, 34,
+      43, 19, 67, 11,  3, 35,
+      44, 20, 68, 12,  4, 36,
+      45, 21, 69, 13,  5, 37,
+      46, 22, 70, 14,  6, 38,
+      47, 23, 71, 15,  7, 39,
+    ];
+    assert_eq!(&true_new_buff[..], &new_buff[..]);
+  }
+
+  #[test]
+  fn test_gen_from_rows_order() {
+    let buff = (0..64).collect::<Vec<i32>>();
+    let m = Matrix::from_slice(&buff, 8, 8).unwrap();
+    let new_buff = unsafe { m.gen_from_rows_order(&[5, 2, 1, 0, 4], false) };
+    let true_new_buff = [
+       5,  2, 1,  0,  4,
+      13, 10, 9,  8, 12,
+      21, 18, 17, 16, 20,
+      29, 26, 25, 24, 28,
+      37, 34, 33, 32, 36,
+      45, 42, 41, 40, 44,
+      53, 50, 49, 48, 52,
+      61, 58, 57, 56, 60
+    ];
+    assert_eq!(&true_new_buff[..], &new_buff[..]);
+    let new_buff = unsafe { m.gen_from_rows_order(&[5, 2, 1, 0, 4], true) };
+    let true_new_buff = [
+      5, 13, 21, 29, 37, 45, 53, 61,
+      2, 10, 18, 26, 34, 42, 50, 58,
+      1,  9, 17, 25, 33, 41, 49, 57,
+      0,  8, 16, 24, 32, 40, 48, 56,
+      4, 12, 20, 28, 36, 44, 52, 60,
     ];
     assert_eq!(&true_new_buff[..], &new_buff[..]);
   }

@@ -398,8 +398,8 @@ macro_rules! impl_maxvol {
           let bij = *b.at((row_num, col_num))?;
           let col = b.subview((0..m, col_num..(col_num + 1)))?;
           let row = b.subview((row_num..(row_num + 1), 0..(n - m)))?;
-          col.write_to(x)?;
-          row.write_to(y)?;
+          col.write_to(x, false)?;
+          row.write_to(y, false)?;
           *x.at((row_num, 0))? -= $complex_one;
           *y.at((0, col_num))? += $complex_one;
           b.rank1_update(x, y, -$complex_one / bij)?;
@@ -665,7 +665,7 @@ use num_complex::{
       let a = Matrix::from_mut_slice(&mut a_buff, m, n).unwrap();
       let a_copy = Matrix::from_slice(&a_buff_copy, m, n).unwrap();
       let new_order = a.maxvol($delta).unwrap();
-      let mut reordered_a_buff = a_copy.gen_from_cols_order(&new_order[..]);
+      let mut reordered_a_buff = a_copy.gen_from_cols_order(&new_order[..], false);
       let reordered_a = Matrix::from_mut_slice(&mut reordered_a_buff, m, n).unwrap();
       let (lhs, rhs) = reordered_a.col_split(m).unwrap();
       lhs.solve(rhs).unwrap();
