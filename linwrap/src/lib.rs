@@ -9,4 +9,5 @@ mod lapack_bind;
 mod linalg_utils;
 pub mod init_utils;
 pub use matrix::Matrix;
+pub use matrix::MatrixError;
 pub use par_ptr_wrapper::ParPtrWrapper;

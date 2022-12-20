@@ -71,3 +71,19 @@ eye!(eye_f32, f32,       1.                    , 0.                    );
 eye!(eye_f64, f64,       1.                    , 0.                    );
 eye!(eye_c32, Complex32, Complex32::new(1., 0.), Complex32::new(0., 0.));
 eye!(eye_c64, Complex64, Complex64::new(1., 0.), Complex64::new(0., 0.));
+
+
+macro_rules! uninit_buff {
+  ($fn_name:ident, $complex_type:ident) => {
+    pub unsafe fn $fn_name(size: usize) -> Vec<$complex_type> {
+      let mut buff = Vec::with_capacity(size);
+      buff.set_len(size);
+      buff
+    }
+  };
+}
+
+uninit_buff!(uninit_buff_f32, f32      );
+uninit_buff!(uninit_buff_f64, f64      );
+uninit_buff!(uninit_buff_c32, Complex32);
+uninit_buff!(uninit_buff_c64, Complex64);
