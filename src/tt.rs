@@ -7,6 +7,9 @@ use num_complex::{
   ComplexFloat,
 };
 
+use rayon::prelude::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
+
 use linwrap::{
   Matrix,
   MatrixError,
@@ -21,14 +24,16 @@ use linwrap::{
     uninit_buff_c64,
   },
 };
-use rayon::prelude::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
+
+use crate::utils::get_trunc_dim;
 
 // ---------------------------------------------------------------------------------- //
 
 #[derive(Debug)]
 pub enum TTError {
   MatrixError(MatrixError),
+  IncorrectIndexLength,
+  OutOfBound,
 }
 
 type TTResult<T> = Result<T, TTError>;
@@ -147,7 +152,8 @@ macro_rules! tt_impl {
     $fn_uninit_buff:ident,
     $complex_zero:expr,
     $complex_one:expr,
-    $real_zero:expr
+    $real_zero:expr,
+    $real_one:expr
   ) => {
     impl TensorTrain<$complex_type> {
       pub fn new_random_normal(
@@ -254,14 +260,68 @@ macro_rules! tt_impl {
         self.kernels.last_mut().unwrap().iter_mut().for_each(|x| { *x *= orth_buff[0] });
         Ok(lognorm)
       }
+
+      pub fn eval_index(&self, index: &[usize]) -> TTResult<$complex_type> {
+        let mut agr_buff = vec![$complex_one; 1];
+        let mut agr = Matrix::from_slice(&agr_buff, 1, 1)?;
+        if self.kernels.len() != index.len() {
+          return Err(TTError::IncorrectIndexLength);
+        }
+        for (i, (ker_buff, right_bond, left_bond, mode_dim)) in index.into_iter().zip(self) {
+          if *i >= mode_dim { return Err(TTError::OutOfBound); }
+          let ker = Matrix::from_slice(ker_buff, left_bond * mode_dim, right_bond)?;
+          let subker = ker.subview(((left_bond * i)..(left_bond * (i + 1)), 0..right_bond))?;
+          let mut new_agr_buff = unsafe { $fn_uninit_buff(right_bond) };
+          let new_agr = Matrix::from_mut_slice(&mut new_agr_buff, 1, right_bond)?;
+          unsafe { new_agr.matmul_inplace(agr, subker, false, false) }?;
+          swap(&mut new_agr_buff, &mut agr_buff);
+          agr = new_agr.into();
+        }
+        Ok(agr_buff[0])
+      }
+
+      pub fn truncate_left_canonical(&mut self, delta: $real_type) -> TTResult<$real_type> {
+        let mut lmbd_buff = vec![$complex_one; 1];
+        let mut lmbd = Matrix::from_mut_slice(&mut lmbd_buff, 1, 1)?;
+        let mut isom_buff = vec![$complex_one; 1];
+        let mut isom = Matrix::from_mut_slice(&mut isom_buff, 1, 1)?;
+        let mut trunc_dim = 1;
+        for (ker_buff, right_bond, left_bond, mode_dim) in self.into_iter().rev() {
+          let ker = Matrix::from_mut_slice(ker_buff, *left_bond * *mode_dim, *right_bond)?;
+          let mut orth_buff = unsafe { $fn_uninit_buff(*left_bond * *mode_dim * trunc_dim) };
+          let mut orth = Matrix::from_mut_slice(&mut orth_buff, *left_bond * *mode_dim, trunc_dim)?;
+          unsafe {
+            orth.matmul_inplace(ker, isom, false, false)?;
+            orth.mul(lmbd)?;
+          };
+          orth = orth.reshape(*left_bond, *mode_dim * trunc_dim)?;
+          let min_dim = std::cmp::min(*left_bond, *mode_dim * trunc_dim);
+          let mut u_buff = unsafe { $fn_uninit_buff(*left_bond * min_dim) };
+          let u = Matrix::from_mut_slice(&mut u_buff, *left_bond, min_dim)?;
+          let mut v_dag_buff = unsafe { $fn_uninit_buff(min_dim * trunc_dim * *mode_dim) };
+          let v_dag = Matrix::from_mut_slice(&mut v_dag_buff, min_dim, trunc_dim * *mode_dim)?;
+          let new_lmbd_buff = unsafe { orth.svd(u, v_dag) }?;
+          let new_trunc_dim = get_trunc_dim(&new_lmbd_buff, delta);
+          lmbd_buff = new_lmbd_buff.into_iter().take(new_trunc_dim).map(|x| $complex_type::from(x)).collect();
+          lmbd = Matrix::from_mut_slice(&mut lmbd_buff, 1, new_trunc_dim)?;
+          isom_buff = unsafe { u.subview((0..(*left_bond), 0..new_trunc_dim))?.gen_buffer() };
+          isom = Matrix::from_mut_slice(&mut isom_buff, *left_bond, new_trunc_dim)?;
+          let mut new_ker_buff = unsafe { v_dag.subview((0..new_trunc_dim, 0..(*mode_dim * trunc_dim)))?.gen_buffer() };
+          swap(ker_buff, &mut new_ker_buff);
+          *left_bond = new_trunc_dim;
+          *right_bond = trunc_dim;
+          trunc_dim = new_trunc_dim;
+        }
+        Ok((lmbd_buff[0].abs()))
+      }
     }
   }
 }
 
-tt_impl!(f32,       f32, random_normal_f32, uninit_buff_f32, 0.,                     1.,                     0.);
-tt_impl!(f64,       f64, random_normal_f64, uninit_buff_f64, 0.,                     1.,                     0.);
-tt_impl!(Complex32, f32, random_normal_c32, uninit_buff_c32, Complex32::new(0., 0.), Complex32::new(1., 0.), 0.);
-tt_impl!(Complex64, f64, random_normal_c64, uninit_buff_c64, Complex64::new(0., 0.), Complex64::new(1., 0.), 0.);
+tt_impl!(f32,       f32, random_normal_f32, uninit_buff_f32, 0.,                     1.,                     0., 1.);
+tt_impl!(f64,       f64, random_normal_f64, uninit_buff_f64, 0.,                     1.,                     0., 1.);
+tt_impl!(Complex32, f32, random_normal_c32, uninit_buff_c32, Complex32::new(0., 0.), Complex32::new(1., 0.), 0., 1.);
+tt_impl!(Complex64, f64, random_normal_c64, uninit_buff_c64, Complex64::new(0., 0.), Complex64::new(1., 0.), 0., 1.);
 
 #[cfg(test)]
 mod tests {
@@ -285,7 +345,11 @@ mod tests {
                  tt_clone.dot(&tt_clone_conj).unwrap() / (2. * log_norm).exp() -
                  tt.dot(&tt_clone_conj).unwrap() / log_norm.exp()-
                  tt_clone.dot(&tt_conj).unwrap() / log_norm.exp();
-      assert!(diff.abs() < 1e-5);      
+      assert!(diff.abs() < 1e-5);
+      assert!((
+        tt.eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() -
+        tt_clone.eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() / log_norm.exp()
+      ).abs() < 1e-5)
     };
   }
 
@@ -296,5 +360,30 @@ mod tests {
     test_dot_and_canonical!(f64);
     test_dot_and_canonical!(Complex32);
     test_dot_and_canonical!(Complex64);
+  }
+
+  macro_rules! test_truncation {
+    ($complex_type:ident) => {
+      let mut tt = TensorTrain::<$complex_type>::new_random_normal(&[2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
+      tt.set_into_left_canonical().unwrap();
+      let tt_clone = tt.clone();
+      let mut tt_clone_conj = tt_clone.clone();
+      tt_clone_conj.conj();
+      tt.truncate_left_canonical(0.01).unwrap();
+      let mut tt_conj = tt.clone();
+      tt_conj.conj();
+      let diff = tt.dot(&tt_conj).unwrap() +
+                 tt_clone.dot(&tt_clone_conj).unwrap() -
+                 tt.dot(&tt_clone_conj).unwrap() -
+                 tt_clone.dot(&tt_conj).unwrap();
+      assert!(diff.abs() < 1e-5)
+    };
+  }
+  #[test]
+  fn test_truncation() {
+    test_truncation!(f32);
+    test_truncation!(f64);
+    test_truncation!(Complex32);
+    test_truncation!(Complex64);
   }
 }
