@@ -26,6 +26,7 @@ use linwrap::{
 };
 
 use crate::utils::get_trunc_dim;
+use crate::ttcross::CrossBuilder;
 
 // ---------------------------------------------------------------------------------- //
 
@@ -36,7 +37,7 @@ pub enum TTError {
   OutOfBound,
 }
 
-type TTResult<T> = Result<T, TTError>;
+pub type TTResult<T> = Result<T, TTError>;
 
 impl From<MatrixError> for TTError {
   fn from(err: MatrixError) -> Self {
@@ -138,10 +139,10 @@ impl <'a, T: 'a> IntoIterator for &'a mut TensorTrain<T> {
 
 #[derive(Debug, Clone)]
 pub struct TensorTrain<T> {
-  kernels:     Vec<Vec<T>>,
-  right_bonds: Vec<usize>,
-  left_bonds:  Vec<usize>,
-  mode_dims:   Vec<usize>,
+  pub(super) kernels:     Vec<Vec<T>>,
+  pub(super) right_bonds: Vec<usize>,
+  pub(super) left_bonds:  Vec<usize>,
+  pub(super) mode_dims:   Vec<usize>,
 }
 
 macro_rules! tt_impl {
@@ -240,7 +241,7 @@ macro_rules! tt_impl {
           let mut aux_buff = unsafe { $fn_uninit_buff(min_dim * min_dim) };
           let aux = Matrix::from_mut_slice(&mut aux_buff, min_dim, min_dim)?;
           let new_ker = new_ker.reshape(nrows, ncols)?;
-          new_ker.qr(aux)?;
+          unsafe { new_ker.qr(aux)? };
           if nrows > ncols {
             *left_bond = new_left_bond;
             new_left_bond = ncols;
@@ -322,6 +323,31 @@ tt_impl!(f32,       f32, random_normal_f32, uninit_buff_f32, 0.,                
 tt_impl!(f64,       f64, random_normal_f64, uninit_buff_f64, 0.,                     1.,                     0., 1.);
 tt_impl!(Complex32, f32, random_normal_c32, uninit_buff_c32, Complex32::new(0., 0.), Complex32::new(1., 0.), 0., 1.);
 tt_impl!(Complex64, f64, random_normal_c64, uninit_buff_c64, Complex64::new(0., 0.), Complex64::new(1., 0.), 0., 1.);
+
+macro_rules! impl_ttcross {
+  ($fn_name:ident, $complex_type:ty, $real_type:ty) => {
+    pub fn $fn_name(
+      mode_dims: &[usize],
+      max_rank: usize,
+      delta: $real_type,
+      f: impl Fn(&[usize]) -> $complex_type + Sync,
+      sweeps_num: usize,
+    ) -> TTResult<TensorTrain<$complex_type>>
+    {
+      let kers_num = mode_dims.len();
+      let mut builder = CrossBuilder::<$complex_type>::new(max_rank, delta, mode_dims);
+      for _ in 0..(kers_num * sweeps_num) {
+        builder.next(&f)?;
+      }
+      Ok(builder.to_tt())
+    }
+  };
+}
+
+impl_ttcross!(ttcross_f32, f32,       f32);
+impl_ttcross!(ttcross_f64, f64,       f64);
+impl_ttcross!(ttcross_c32, Complex32, f32);
+impl_ttcross!(ttcross_c64, Complex64, f64);
 
 #[cfg(test)]
 mod tests {

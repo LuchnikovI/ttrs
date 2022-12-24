@@ -81,6 +81,28 @@ extern "C" {
   geqrf!(zgeqrf_, Complex64);
 }
 
+/*macro_rules! gerqf {
+  ($fn_name:ident, $type_name:ident) => {
+    pub(super) fn $fn_name(
+      m:     *const c_int,
+      n:     *const c_int,
+      a:     *mut   $type_name,
+      lda:   *const c_int,
+      tau:   *mut   $type_name,
+      work:  *mut   $type_name,
+      lwork: *const c_int,
+      info:  *mut   c_int,
+    );
+  };
+}
+
+extern "C" {
+gerqf!(sgerqf_, f32      );
+gerqf!(dgerqf_, f64      );
+gerqf!(cgerqf_, Complex32);
+gerqf!(zgerqf_, Complex64);
+}*/
+
 macro_rules! ungqr {
   ($fn_name:ident, $type_name:ident) => {
     pub(super) fn $fn_name
@@ -104,4 +126,28 @@ extern "C" {
   ungqr!(dorgqr_, f64);
   ungqr!(sorgqr_, f32);
 }
+
+/*macro_rules! ungrq {
+  ($fn_name:ident, $type_name:ident) => {
+    pub(super) fn $fn_name
+    (
+      m:     *const c_int,
+      n:     *const c_int,
+      k:     *const c_int,
+      a:     *mut   $type_name,
+      lda:   *const c_int,
+      tau:   *mut   $type_name,
+      work:  *mut   $type_name,
+      lwork: *const c_int,
+      info:  *mut   c_int,
+    );
+  };
+}
+
+extern "C" {
+  ungrq!(cungrq_, Complex32);
+  ungrq!(zungrq_, Complex64);
+  ungrq!(dorgrq_, f64);
+  ungrq!(sorgrq_, f32);
+}*/
 

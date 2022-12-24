@@ -281,6 +281,7 @@ impl<T> Matrix<*mut T>
     let m: Matrix<_> = slice.into();
     m.reshape(nrows, ncols)
   }
+
 }
 
 impl<T> From<&[T]> for Matrix<*const T>

@@ -9,6 +9,10 @@ use num_complex::{
   Complex,
 };
 
+use rayon::iter::ParallelIterator;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::IndexedParallelIterator;
+
 use crate::{
   Matrix,
   matrix::{
@@ -306,7 +310,7 @@ impl_householder_to_q!(zungqr_, Complex64, Complex64::new(0., 0.), |x: Complex64
 macro_rules! impl_qr {
   ($type_name:ident) => {
     impl Matrix<*mut $type_name> {
-      pub fn qr(
+      pub unsafe fn qr(
         mut self,
         other: Self,
       ) -> MatrixResult<()>
@@ -372,7 +376,7 @@ impl_rank1_update!(cgeru_, Complex32);
 impl_rank1_update!(zgeru_, Complex64);
 
 macro_rules! impl_maxvol {
-  ($complex_type_name:ident, $type_name:ident, $complex_one:expr) => {
+  ($complex_type_name:ident, $type_name:ident, $complex_one:expr, $complex_zero:expr) => {
     impl Matrix<*mut $complex_type_name> {
       pub unsafe fn maxvol(self, delta: $type_name) -> MatrixResult<Vec<usize>> {
         let m = self.nrows;
@@ -389,6 +393,9 @@ macro_rules! impl_maxvol {
         let y = Matrix::from_mut_slice(&mut y_buff, 1, n - m)?;
         let (a, b) = self.col_split(m).unwrap();
         unsafe { a.solve(b) }?;
+        unsafe { (0..(m * m)).into_par_iter().zip(a.into_par_iter()).for_each(|(i, x)| {
+          if i % (m + 1) == 0 { *x.0 = $complex_one } else { *x.0 = $complex_zero }
+        }) };
         let mut val;
         let mut row_num;
         let mut col_num;
@@ -411,10 +418,10 @@ macro_rules! impl_maxvol {
   };
 }
 
-impl_maxvol!(f32,       f32, 1.                    );
-impl_maxvol!(f64,       f64, 1.                    );
-impl_maxvol!(Complex32, f32, Complex32::new(1., 0.));
-impl_maxvol!(Complex64, f64, Complex64::new(1., 0.));
+impl_maxvol!(f32,       f32, 1.                    ,                     0.);
+impl_maxvol!(f64,       f64, 1.                    ,                     0.);
+impl_maxvol!(Complex32, f32, Complex32::new(1., 0.), Complex32::new(0., 0.));
+impl_maxvol!(Complex64, f64, Complex64::new(1., 0.), Complex64::new(0., 0.));
 
 // ---------------------------------------------------------------------- //
 
