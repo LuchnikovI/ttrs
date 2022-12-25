@@ -122,6 +122,7 @@ macro_rules! impl_next {
             } else {
               if left_indices.len() == right_bond {
                 self.kernels[cur_ker] = $fn_eye(right_bond);
+                self.left_indices[cur_ker + 1] = indices_prod(&self.left_indices[cur_ker], &local_indices);
                 self.cur_ker += 1;
               } else {
                 let mut m_buff_trans: Vec<_> = right_indices_ref.into_par_iter().flat_map(|rhs| {
@@ -162,6 +163,7 @@ macro_rules! impl_next {
             } else {
               if right_indices.len() == left_bond {
                 self.kernels[cur_ker] = $fn_eye(left_bond);
+                self.right_indices[cur_ker - 1] = indices_prod(&local_indices, &self.right_indices[cur_ker]);
                 self.cur_ker -= 1;
               } else {
                 let mut m_buff_trans: Vec<_> = left_indices_ref.into_par_iter().flat_map(|lhs| {
@@ -234,8 +236,8 @@ mod tests {
   #[test]
   fn test_cross() {
     { test_cross!(f32,       f32, 1e-3); }
-    { test_cross!(f64,       f64, 1e-8); }
+    { test_cross!(f64,       f64, 1e-10); }
     { test_cross!(Complex32, f32, 1e-3); }
-    { test_cross!(Complex64, f64, 1e-8); }
+    { test_cross!(Complex64, f64, 1e-10); }
   }
 }
