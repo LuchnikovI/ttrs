@@ -79,12 +79,12 @@ fn get_reward(state: &[f64], size: usize, node: (usize, usize)) -> f64 {
 // |||||||
 //@@@@@@@@@
 //@S# # # @-0
-//@   T   @-1
+//@       @-1
 //@ # # # @-2
 //@       @-3
 //@ # # # @-4
 //@       @-5
-//@ # # # @-6
+//@ # # #T@-6
 //@@@@@@@@@
 unsafe fn run_mdp(seq: &[usize]) -> f64 {
     let rules = Rules::new_lattice(7, From::from([
