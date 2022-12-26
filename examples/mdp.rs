@@ -77,30 +77,28 @@ fn get_reward(state: &[f64], size: usize, node: (usize, usize)) -> f64 {
 
 // 0123456
 // |||||||
-//#########
-//#S# #  T#-0
-//# # #   #-1
-//# # ### #-2
-//#       #-3
-//# #  #  #-4
-//# #  #  #-5
-//# #  #  #-6
-//#########
+//@@@@@@@@@
+//@S# # # @-0
+//@   T   @-1
+//@ # # # @-2
+//@       @-3
+//@ # # # @-4
+//@       @-5
+//@ # # # @-6
+//@@@@@@@@@
 unsafe fn run_mdp(seq: &[usize]) -> f64 {
     let rules = Rules::new_lattice(7, From::from([
-        (0, 1), (0, 3),
-        (1, 1), (1, 3),
-        (2, 1), (2, 3), (2, 4), (2, 5),
-        (4, 1), (4, 4),
-        (5, 1), (5, 4),
-        (6, 1), (6, 4),
-    ]), 0.05);
+        (0, 1), (0, 3), (0, 5),
+        (2, 1), (2, 3), (2, 5),
+        (4, 1), (4, 3), (4, 5),
+        (6, 1), (6, 3), (6, 5),
+    ]), 0.01);
     let mut state = vec![0.; 49];
     state[0] = 1.;
     for a in seq {
         state = unsafe { rules.update_state(state, *a) };
     }
-    get_reward(&state, 7, (0, 6))
+    get_reward(&state, 7, (6, 6))
 }
 
 
@@ -109,17 +107,16 @@ fn main() {
     let mode_dims = [4; 50];
     let sweeps_num = 4;
     let mut tt = ttcross_f64(&mode_dims, 50, 0.0001, |x| unsafe { run_mdp(x) }, sweeps_num).unwrap();
-    println!("Let us try to predict the reward given a random control sequence and reconstructed TT model of the process:");
-    for _ in 0..4 {
+    println!("Exact reward value vs predicted:");
+    for _ in 0..10 {
         let random_seq: Vec<_> = (0..50).map(|_| { rng.gen::<usize>() % 4 }).collect();
-        println!("Exact: {:?}, predicted: {:?}", unsafe { run_mdp(&random_seq) }, tt.eval_index(&random_seq).unwrap());
+        println!("{:?} vs {:?}", unsafe { run_mdp(&random_seq) }, tt.eval_index(&random_seq).unwrap());
     }
-    println!("Now let us find the bond dimension of the TT model and compare its maximum with the available states for the 'robot':");
     tt.set_into_left_canonical().unwrap();
-    tt.truncate_left_canonical(0.0001).unwrap();
+    tt.truncate_left_canonical(1e-5).unwrap();
     println!("Bond dimensions:");
     println!("{:?}", tt.get_bonds());
-    println!("Number of available states is equal to 35.")
+    println!("vs number of possible states: 37.")
 }
 
 #[cfg(test)]
