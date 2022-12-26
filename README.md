@@ -1,6 +1,6 @@
 # TTRS - Tensor Train format for Rust
 This is an attempt to implement the [Tensor Train](https://sites.pitt.edu/~sjh95/related_papers/tensor_train_decomposition.pdf) (TT) format for processing of large low-rank tensors.
-Currently, this repo contains implementation of the [TTCross](https://www.sciencedirect.com/science/article/pii/S0024379509003747) algorithm for efficient reconstruction of tensors from "black-box"
+Currently, this repo contains an implementation of the [TTCross](https://www.sciencedirect.com/science/article/pii/S0024379509003747) algorithm for efficient reconstruction of tensors from "black-box"
 functions, subroutines for setting a TT representation into the left-canonical form, svd-based truncation and dot product.
 
 The code is at the early stage of development and might contain severe bugs including safety issues.
