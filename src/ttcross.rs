@@ -210,6 +210,7 @@ mod tests {
   use num_complex::{
     Complex32,
     Complex64,
+    ComplexFloat,
   };
 
   macro_rules! test_cross {
@@ -221,8 +222,16 @@ mod tests {
         <$complex_type>::cos(<$complex_type>::from(total_val)).sqrt()
       }
   
-      let mut builder = CrossBuilder::<$complex_type>::new(25, 0.01, &[2; 20]);
-      for _ in 0..(20 * 6) {
+      let mut builder = CrossBuilder::<$complex_type>::new(25, 0.001, &[2; 20]);
+      for _ in 0..20 {
+        builder.next(cos_sqrt).unwrap();
+      }
+      assert!(builder.kernels[..19].iter().all(|x| { x.into_iter().all(|y| y.abs() < 1.001) }));
+      for _ in 0..20 {
+        builder.next(cos_sqrt).unwrap();
+      }
+      assert!(builder.kernels[1..].iter().all(|x| { x.into_iter().all(|y| y.abs() < 1.001) }));
+      for _ in 0..(4 * 20) {
         builder.next(cos_sqrt).unwrap();
       }
       let mut tt = builder.to_tt();

@@ -183,6 +183,10 @@ macro_rules! tt_impl {
         Self { kernels, right_bonds, left_bonds, mode_dims }
       }
 
+      pub fn get_bonds(&self) -> &[usize] {
+        &self.left_bonds[1..]
+      }
+
       pub fn conj(&mut self) {
         for ker in &mut self.kernels {
           let len = ker.len();
