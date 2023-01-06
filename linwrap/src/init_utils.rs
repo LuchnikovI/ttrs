@@ -1,11 +1,11 @@
-use rayon::prelude::{
+/*use rayon::prelude::{
   ParallelIterator,
   IntoParallelIterator,
 };
 use rayon::iter::{
   IndexedParallelIterator,
   IntoParallelRefMutIterator,
-};
+};*/
 use rand::{
   thread_rng,
   Rng,
@@ -17,21 +17,21 @@ use num_complex::{
 };
 
 pub fn random_normal_f32(size: usize) -> Vec<f32> {
-  (0..size).into_par_iter().map(|_| {
+  (0..size).into_iter().map(|_| {
     let mut rng = thread_rng();
     rng.sample::<f32, _>(StandardNormal)
   }).collect()
 }
 
 pub fn random_normal_f64(size: usize) -> Vec<f64> {
-  (0..size).into_par_iter().map(|_| {
+  (0..size).into_iter().map(|_| {
     let mut rng = thread_rng();
     rng.sample::<f64, _>(StandardNormal)
   }).collect()
 }
 
 pub fn random_normal_c32(size: usize) -> Vec<Complex32> {
-  (0..size).into_par_iter().map(|_| {
+  (0..size).into_iter().map(|_| {
     let mut rng = thread_rng();
     Complex32::new(
       rng.sample::<f32, _>(StandardNormal),
@@ -41,7 +41,7 @@ pub fn random_normal_c32(size: usize) -> Vec<Complex32> {
 }
 
 pub fn random_normal_c64(size: usize) -> Vec<Complex64> {
-  (0..size).into_par_iter().map(|_| {
+  (0..size).into_iter().map(|_| {
     let mut rng = thread_rng();
     Complex64::new(
       rng.sample::<f64, _>(StandardNormal),
@@ -55,8 +55,8 @@ macro_rules! eye {
     pub fn $fn_name(m: usize) -> Vec<$type_name> {
       let mut buff = Vec::with_capacity(m * m);
       unsafe { buff.set_len(m * m); }
-      let r = (0..(m * m)).into_par_iter();
-      r.zip(buff.par_iter_mut()).for_each(|(i, x)| {
+      let r = (0..(m * m)).into_iter();
+      r.zip(buff.iter_mut()).for_each(|(i, x)| {
         *x = $complex_zero;
         if i % (m + 1) == 0 {
           *x = $complex_one;

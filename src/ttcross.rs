@@ -21,7 +21,7 @@ use linwrap::init_utils::{
   uninit_buff_c32,
   uninit_buff_c64,
 };
-use linwrap::Matrix;
+use linwrap::NDArray;
 
 
 use crate::utils::{
@@ -131,20 +131,20 @@ macro_rules! impl_next {
                     f(&index[..])
                   })
                 }).collect();
-                let m_trans = Matrix::from_mut_slice(&mut m_buff_trans, left_bond * dim, right_bond)?;
+                let m_trans = NDArray::from_mut_slice(&mut m_buff_trans, [left_bond * dim, right_bond])?;
                 let mut aux_buff = unsafe { $fn_uninit_buff(right_bond.pow(2)) };
-                let aux = Matrix::from_mut_slice(&mut aux_buff, right_bond, right_bond)?;
+                let aux = NDArray::from_mut_slice(&mut aux_buff, [right_bond, right_bond])?;
                 unsafe { m_trans.qr(aux)? };  // TODO: turn to the RQ decomposition in order to avoid transposition and extra allocation
                 let mut m_buff = unsafe { $fn_uninit_buff(m_buff_trans.len()) };
-                let m = Matrix::from_mut_slice(&mut m_buff, right_indices_ref.len(), left_indices.len())?;
-                unsafe { m_trans.write_to(m, true)? };
+                let m = NDArray::from_mut_slice(&mut m_buff, [right_indices_ref.len(), left_indices.len()])?;
+                unsafe { m_trans.transpose([1, 0])?.write_to(m)? };
                 let mut order = unsafe { m.maxvol(self.delta)? };
                 let mut reverse_order = Vec::with_capacity(order.len());
                 unsafe { reverse_order.set_len(order.len()) };
                 order.iter().enumerate().for_each(|(i, x)| {
                   reverse_order[*x] = i;
                 });
-                self.kernels[cur_ker] = unsafe { m.gen_from_cols_order(&reverse_order, true) };
+                (self.kernels[cur_ker], _) = unsafe { m.transpose([1, 0])?.gen_f_array_from_axis_order(&reverse_order, 0) };
                 order.resize(right_indices_ref.len(), 0);
                 self.left_indices[cur_ker + 1] = order.into_iter().map(|i| left_indices[i].clone()).collect();
                 self.cur_ker += 1;
@@ -172,20 +172,20 @@ macro_rules! impl_next {
                     f(&index[..])
                   })
                 }).collect();
-                let m_trans = Matrix::from_mut_slice(&mut m_buff_trans, right_indices.len(), left_indices_ref.len())?;
+                let m_trans = NDArray::from_mut_slice(&mut m_buff_trans, [right_indices.len(), left_indices_ref.len()])?;
                 let mut aux_buff = unsafe { $fn_uninit_buff(left_indices_ref.len().pow(2)) };
-                let aux = Matrix::from_mut_slice(&mut aux_buff, left_indices_ref.len(), left_indices_ref.len())?;
+                let aux = NDArray::from_mut_slice(&mut aux_buff, [left_indices_ref.len(), left_indices_ref.len()])?;
                 unsafe { m_trans.qr(aux)? };  // TODO: turn to the RQ decomposition in order to avoid transposition and extra allocation
                 let mut m_buff = unsafe { $fn_uninit_buff(m_buff_trans.len()) };
-                let m = Matrix::from_mut_slice(&mut m_buff, left_indices_ref.len(), right_indices.len())?;
-                unsafe { m_trans.write_to(m, true)? };
+                let m = NDArray::from_mut_slice(&mut m_buff, [left_indices_ref.len(), right_indices.len()])?;
+                unsafe { m_trans.transpose([1, 0])?.write_to(m)? };
                 let mut order = unsafe { m.maxvol(self.delta)? };
                 let mut reverse_order = Vec::with_capacity(order.len());
                 unsafe { reverse_order.set_len(order.len()) };
                 order.iter().enumerate().for_each(|(i, x)| {
                   reverse_order[*x] = i;
                 });
-                self.kernels[cur_ker] = unsafe { m.gen_from_cols_order(&reverse_order, false) };
+                (self.kernels[cur_ker], _) = unsafe { m.gen_f_array_from_axis_order(&reverse_order, 1) };
                 order.resize(left_indices_ref.len(), 0);
                 self.right_indices[cur_ker - 1] = order.into_iter().map(|i| right_indices[i].clone()).collect();
                 self.cur_ker -= 1;
@@ -226,11 +226,15 @@ mod tests {
       for _ in 0..20 {
         builder.next(cos_sqrt).unwrap();
       }
-      assert!(builder.kernels[..19].iter().all(|x| { x.into_iter().all(|y| y.abs() < 1.001) }));
+      assert!(builder.kernels[..19].iter().all(|x| { x.into_iter().all(|y| {
+        y.abs() < 1.001
+      }) }));
       for _ in 0..20 {
         builder.next(cos_sqrt).unwrap();
       }
-      assert!(builder.kernels[1..].iter().all(|x| { x.into_iter().all(|y| y.abs() < 1.001) }));
+      assert!(builder.kernels[1..].iter().all(|x| { x.into_iter().all(|y| {
+        y.abs() < 1.001
+      }) }));
       for _ in 0..(4 * 20) {
         builder.next(cos_sqrt).unwrap();
       }
@@ -239,6 +243,16 @@ mod tests {
       let tt_based = (2. * log_norm - 19. * (2 as $real_type).ln()).exp();
       let exact = 2. * (1 as $real_type).sin();
       assert!((tt_based - exact).abs() < $acc);
+      tt.truncate_left_canonical(1e-6).unwrap();
+      let mut tt_conj = tt.clone();
+      tt_conj.conj();
+      tt.prod(&tt_conj).unwrap();
+      //tt.set_into_left_canonical().unwrap();
+      //tt.truncate_left_canonical(1e-5).unwrap();
+      let index1 = [1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0];
+      let index2 = [0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0];
+      assert!((tt.eval_index(&index1).unwrap() * (2. * log_norm).exp() - cos_sqrt(&index1).powi(2)).abs() < 1e-3);
+      assert!((tt.eval_index(&index2).unwrap() * (2. * log_norm).exp() - cos_sqrt(&index2).powi(2)).abs() < 1e-3);
     };
   }
 

@@ -1,6 +1,8 @@
 mod par_ptr_wrapper;
-mod matrix;
+mod ndarray_utils;
+mod ndarray;
 mod elementwise_unary_ops;
+mod elementwise_inplace_binary_ops;
 mod elementwise_binary_ops;
 mod reduction_ops;
 mod blas_bind;
@@ -8,6 +10,6 @@ mod linalg;
 mod lapack_bind;
 mod linalg_utils;
 pub mod init_utils;
-pub use matrix::Matrix;
-pub use matrix::MatrixError;
+pub use crate::ndarray::NDArray;
+pub use crate::ndarray::NDArrayError;
 pub use par_ptr_wrapper::ParPtrWrapper;

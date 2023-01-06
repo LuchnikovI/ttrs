@@ -116,7 +116,12 @@ fn main() {
     tt.truncate_left_canonical(1e-5).unwrap();
     println!("Bond dimensions:");
     println!("{:?}", tt.get_bonds());
-    println!("vs number of possible states: 37.")
+    println!("vs number of possible states: 37.");
+    let tt_clone = tt.clone();
+    tt.prod(&tt_clone).unwrap();
+    tt.set_into_left_canonical().unwrap();
+    tt.truncate_left_canonical(1e-2).unwrap();
+    println!("{:?}", tt.get_bonds());
 }
 
 #[cfg(test)]

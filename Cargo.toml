@@ -9,6 +9,7 @@ rayon = "1.6.0"
 num-complex = "0.4.2"
 num-traits = "0.2.15"
 rand = "0.8.5"
+rawpointer = "0.2.1"
 
 [workspace]
 

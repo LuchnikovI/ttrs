@@ -1,6 +1,11 @@
+use num_complex::ComplexFloat;
 use num_traits::Float;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use rawpointer::PointerExt;
+
+use linwrap::ParPtrWrapper;
 
 pub(super) fn get_trunc_dim<T: Float>(lmbd: &[T], delta_local: T) -> usize
 {
@@ -108,6 +113,36 @@ pub(super) fn build_random_indices(
     all_right_indices[kers_num - 2 - length] = right_new_indices;
   }
   (all_left_indices, all_right_indices)
+}
+
+
+// TODO: It should go to the linwrap
+pub(super) unsafe fn bond_prod<T: ComplexFloat>(
+  lhs: &[T],
+  lhs_left_bond: usize,
+  lhs_right_bond: usize,
+  rhs: &[T],
+  rhs_left_bond: usize,
+  rhs_right_bond: usize,
+  dim: usize,
+) -> Vec<T>
+{
+  let len = dim * lhs_left_bond * lhs_right_bond * rhs_left_bond * rhs_right_bond;
+  let mut result: Vec<T> = Vec::with_capacity(len);
+  result.set_len(len);
+  let result_mut_ptr = ParPtrWrapper(result.as_mut_ptr());
+  let lhs_ptr = ParPtrWrapper(lhs.as_ptr());
+  let rhs_ptr = ParPtrWrapper(rhs.as_ptr());
+  (0..len).into_par_iter().for_each(|i| {
+    let lhs_left_idx = i % lhs_left_bond;
+    let rhs_left_idx = (i / lhs_left_bond) % rhs_left_bond;
+    let dim_idx = (i / (lhs_left_bond * rhs_left_bond)) % dim;
+    let lhs_right_idx = (i / (lhs_left_bond * rhs_left_bond * dim)) % lhs_right_bond;
+    let rhs_right_idx = (i / (lhs_left_bond * rhs_left_bond * dim * lhs_right_bond)) % rhs_right_bond;
+    *result_mut_ptr.add(i).0 = *lhs_ptr.add(lhs_left_idx + lhs_left_bond * dim_idx + lhs_left_bond * dim * lhs_right_idx).0
+                             * *rhs_ptr.add(rhs_left_idx + rhs_left_bond * dim_idx + rhs_left_bond * dim * rhs_right_idx).0;
+  });
+  result
 }
 
 #[cfg(test)]
