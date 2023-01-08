@@ -153,23 +153,25 @@ mod tests {
       let tt_clone = tt.clone();
       let mut tt_conj = tt.clone();
       tt_conj.conj();
-      let log_dot = tt.dot(&tt_conj).unwrap().ln().abs();
+      let log_dot = tt.log_dot(&tt_conj).unwrap().abs();
       let log_norm = tt.$set_to_canonical_method().unwrap();
       assert!((log_dot - 2. * log_norm).abs() < 1e-5);
       tt_conj = tt.clone();
       tt_conj.conj();
-      let dot = tt.dot(&tt_conj).unwrap().abs();
-      assert!((dot - 1.).abs() < 1e-5);
+      let log_dot = tt.log_dot(&tt_conj).unwrap().abs();
+      assert!(log_dot.abs() < 1e-5);
       let mut tt_clone_conj = tt_clone.clone();
       tt_clone_conj.conj();
-      let diff = tt.dot(&tt_conj).unwrap() +
-                 tt_clone.dot(&tt_clone_conj).unwrap() / (2. * log_norm).exp() -
-                 tt.dot(&tt_clone_conj).unwrap() / log_norm.exp()-
-                 tt_clone.dot(&tt_conj).unwrap() / log_norm.exp();
+      let diff = tt.log_dot(&tt_conj).unwrap().exp() +
+                 tt_clone.log_dot(&tt_clone_conj).unwrap().exp() / (2. * log_norm).exp() -
+                 tt.log_dot(&tt_clone_conj).unwrap().exp() / log_norm.exp()-
+                 tt_clone.log_dot(&tt_conj).unwrap().exp() / log_norm.exp();
       assert!(diff.abs() < 1e-5);
+      println!("{:?}", tt.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap());
+      println!("{:?}", tt_clone.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() + log_norm);
       assert!((
-        tt.eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() -
-        tt_clone.eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() / log_norm.exp()
+        tt.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() -
+        tt_clone.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() + log_norm
       ).abs() < 1e-5);
     };
   }
@@ -187,6 +189,25 @@ mod tests {
     test_dot_and_canonical!(Complex64, set_into_right_canonical);
   }
 
+  macro_rules! test_log_sum {
+    ($complex_type:ty) => {
+      let mut tt = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 15);
+      let tt_other = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 15);
+      let log_dot_val = tt.log_dot(&tt_other).unwrap();
+      tt.elementwise_prod(&tt_other).unwrap();
+      let log_sum_val = tt.log_sum().unwrap();
+      assert!((log_sum_val - log_dot_val).abs() < 1e-4);
+    };
+  }
+
+  #[test]
+  fn test_log_sum() {
+    test_log_sum!(f32      );
+    test_log_sum!(f64      );
+    test_log_sum!(Complex32);
+    test_log_sum!(Complex64);
+  }
+
   macro_rules! test_truncation {
     ($complex_type:ident, $set_to_canonical_method:ident, $truncation_method:ident) => {
       let mut tt = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
@@ -197,10 +218,10 @@ mod tests {
       tt.$truncation_method(0.001).unwrap();
       let mut tt_conj = tt.clone();
       tt_conj.conj();
-      let diff = tt.dot(&tt_conj).unwrap() +
-                 tt_clone.dot(&tt_clone_conj).unwrap() -
-                 tt.dot(&tt_clone_conj).unwrap() -
-                 tt_clone.dot(&tt_conj).unwrap();
+      let diff = tt.log_dot(&tt_conj).unwrap().exp() +
+                 tt_clone.log_dot(&tt_clone_conj).unwrap().exp() -
+                 tt.log_dot(&tt_clone_conj).unwrap().exp() -
+                 tt_clone.log_dot(&tt_conj).unwrap().exp();
       assert!(diff.abs() < 1e-5)
     };
   }

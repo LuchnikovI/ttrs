@@ -3,12 +3,13 @@ use num_complex::ComplexFloat;
 //use rayon::prelude::{ParallelIterator, IntoParallelIterator};
 
 use crate::NDArray;
+use crate::NDArrayError;
+use crate::ndarray::NDArrayResult;
 
 // ---------------------------------------------------------------------- //
-// TODO: find a universal API for reduction operation and
-// implement NumPy like reductions for all meaningful operations
+// TODO: implement reductions for all meaningful operations
 
-macro_rules! reduction_op {
+macro_rules! reduction_ops_to_scalar {
   ($ptr_type:ident) => {
     impl<T, const N: usize> NDArray<*$ptr_type T, N>
     where
@@ -37,14 +38,60 @@ macro_rules! reduction_op {
   };
 }
 
-reduction_op!(mut);
-reduction_op!(const);
+reduction_ops_to_scalar!(mut);
+reduction_ops_to_scalar!(const);
+
+// TODO: make it more cache friendly?
+macro_rules! reduction_ops_to_array {
+  ($ptr_type:ident, $fn_name:ident, $body:expr) => {
+    impl<T, const N: usize> NDArray<*$ptr_type T, N>
+    where
+      T: ComplexFloat + Send + Sync + 'static,
+      <T as ComplexFloat>::Real: Sum + Send + Sync + PartialOrd,
+    {
+      /// This method perform reduction operation over self and write result to the dst array.
+      /// It follows rules similar to those for broadcasting: if a mode of dst has dimension 1,
+      /// then this mode is being reduced. It also returns a broadcasting error, when this rule is
+      /// violated.
+      /// Note, that dst must be initialized by 'zero' for a particular reduction operation.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
+      pub unsafe fn $fn_name(
+        self,
+        mut dst: NDArray<*mut T, N>,
+      ) -> NDArrayResult<()>
+      {
+        let iter = self.shape.into_iter().zip(dst.strides.iter_mut().zip(dst.shape.iter_mut()));
+        for (self_sh, (dst_st, dst_sh)) in iter {
+          if *dst_sh == 1 {
+            *dst_st = 0;
+            *dst_sh = self_sh;
+          } else if (*dst_sh != self_sh) {
+            return Err(NDArrayError::BroadcastingError(Box::new(self.shape), Box::new(dst.shape)));
+          }
+        }
+        dst.into_f_iter().zip(self.into_f_iter()).for_each(|(d, s)| {
+          $body(d.0, s.0);
+        });
+        Ok(())
+      }
+    }
+  };
+}
+
+reduction_ops_to_array!(mut,   reduce_add,  |x: *mut T, y: *const T| { *x = *x + *y; });
+reduction_ops_to_array!(const, reduce_add,  |x: *mut T, y: *const T| { *x = *x + *y; });
+reduction_ops_to_array!(mut,   reduce_prod, |x: *mut T, y: *const T| { *x = *x * *y; });
+reduction_ops_to_array!(const, reduce_prod, |x: *mut T, y: *const T| { *x = *x * *y; });
 
 // ---------------------------------------------------------------------- //
 
 #[cfg(test)]
 mod tests {
   use crate::NDArray;
+  use ndarray::Array4;
+  use ndarray::Axis;
+
   #[test]
   fn test_norm() {
     let buff = (0..10000).map(|x| x as f64).collect::<Vec<_>>();
@@ -68,5 +115,20 @@ mod tests {
     _test_argmax([0, 0, 0, 0]);
     _test_argmax([4, 2, 1, 3]);
     _test_argmax([7, 3, 1, 3]);
+  }
+
+  #[test]
+  fn test_reduce_add() {
+    let buff = (0..256).map(|x| x as f64).collect::<Vec<_>>();
+    let mut dst_buff = vec![0.; 16];
+    let arr1 = NDArray::from_slice(&buff, [4, 8, 4, 2]).unwrap();
+    let dst_arr = NDArray::from_mut_slice(&mut dst_buff, [4, 1, 4, 1]).unwrap();
+    let arr2 = Array4::from_shape_vec((2, 4, 8, 4), buff).unwrap();
+    let arr2 = arr2.sum_axis(Axis(0)).sum_axis(Axis(1));
+    unsafe { arr1.reduce_add(dst_arr).unwrap() };
+    let is_eq = arr2.iter().zip(unsafe { dst_arr.into_f_iter() }).all(|(lhs, rhs)| {
+      *lhs == unsafe { *rhs.0 }
+    });
+    assert!(is_eq);
   }
 }

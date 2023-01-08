@@ -5,6 +5,7 @@ mod elementwise_unary_ops;
 mod elementwise_inplace_binary_ops;
 mod elementwise_binary_ops;
 mod reduction_ops;
+mod concatenation;
 mod blas_bind;
 mod linalg;
 mod lapack_bind;

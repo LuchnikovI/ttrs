@@ -245,8 +245,8 @@ mod tests {
       tt.elementwise_prod(&tt_conj).unwrap();
       let index1 = [1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0];
       let index2 = [0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0];
-      assert!((tt.eval_index(&index1).unwrap() * (2. * log_norm).exp() - cos_sqrt(&index1).powi(2)).abs() < 1e-3);
-      assert!((tt.eval_index(&index2).unwrap() * (2. * log_norm).exp() - cos_sqrt(&index2).powi(2)).abs() < 1e-3);
+      assert!(((tt.log_eval_index(&index1).unwrap() + 2. * log_norm).exp() - cos_sqrt(&index1).powi(2)).abs() < 1e-3);
+      assert!(((tt.log_eval_index(&index2).unwrap() + 2. * log_norm).exp() - cos_sqrt(&index2).powi(2)).abs() < 1e-3);
     };
   }
 

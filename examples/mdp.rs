@@ -113,7 +113,7 @@ fn main() {
     println!("Exact reward value vs predicted:");
     for _ in 0..10 {
         let random_seq: Vec<_> = (0..50).map(|_| { rng.gen::<usize>() % 4 }).collect();
-        println!("{:?} vs {:?}", unsafe { run_mdp(&random_seq) }, tt.eval_index(&random_seq).unwrap());
+        println!("{:?} vs {:?}", unsafe { run_mdp(&random_seq) }, tt.log_eval_index(&random_seq).unwrap().exp().re);
     }
     tt.set_into_left_canonical().unwrap();
     tt.truncate_left_canonical(1e-5).unwrap();

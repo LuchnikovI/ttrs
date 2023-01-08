@@ -2,6 +2,7 @@ use std::mem::swap;
 use std::iter::DoubleEndedIterator;
 
 use num_complex::{
+  Complex,
   Complex32,
   Complex64,
   ComplexFloat,
@@ -200,11 +201,14 @@ macro_rules! tt_impl {
         }
       }
 
-      /// This method returns a dot product between two Tensor Trains.
+      /// This method returns a natural logarithm of dot product of two Tensor Trains.
+      /// The logarithm is necessary to make computation stable, when the value of the
+      /// dot is exponentially big.
       /// It returns error when shapes of tensors do not match each other.
-      fn dot(&self, other: &Self) -> TTResult<$complex_type> {
+      fn log_dot(&self, other: &Self) -> TTResult<Complex<$real_type>> {
         if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch); }
         let mut agr_buff = vec![$complex_one];
+        let mut agr_val = $complex_zero;
         let iter = self.iter().zip(other.iter());
         for (
             (lhs_ker, lhs_right_bond, lhs_left_bond, lhs_mode_dim),
@@ -223,14 +227,44 @@ macro_rules! tt_impl {
             let rhs_ker = NDArray::from_slice(rhs_ker, [rhs_left_bond * rhs_mode_dim, rhs_right_bond])?;
             new_agr.matmul_inplace(rhs_ker.transpose([1, 0])?, agr)?;
             (agr_buff, _) = new_agr.gen_f_array();
+            let agr_buff_len = agr_buff.len();
+            let agr = NDArray::from_mut_slice(&mut agr_buff, [agr_buff_len])?;
+            let norm_sq = agr.norm_n_pow_n(2);
+            agr.mul_by_scalar($complex_type::from(norm_sq.powf(-0.5)));
+            agr_val = agr_val + norm_sq.ln() / 2.;
           }
         };
-        Ok(agr_buff[0])
+        Ok(Complex::<$real_type>::from(agr_val) + Complex::<$real_type>::from(agr_buff[0]).ln())
+      }
+
+      /// This method returns natural logarithm of the sum of all elements of a tensor.
+      /// The logarithm is necessary to make computation stable, when the value of the
+      /// sum is exponentially big.
+      fn log_sum(&self) -> TTResult<Complex<$real_type>> {
+        let mut agr_val = $complex_zero;
+        let mut agr_buff = vec![$complex_one];
+        for (ker, right_bond, left_bond, mode_dim) in self.iter() {
+          let agr = NDArray::from_mut_slice(&mut agr_buff, [1, left_bond])?;
+          let mut new_agr_buff = unsafe { $fn_uninit_buff(right_bond) };
+          let new_agr = NDArray::from_mut_slice(&mut new_agr_buff, [1, right_bond])?;
+          let mut reduced_ker_buff = vec![$complex_zero; left_bond * right_bond];
+          let reduced_ker = NDArray::from_mut_slice(&mut reduced_ker_buff, [left_bond, 1, right_bond])?;
+          let ker_arr = NDArray::from_slice(&ker, [left_bond, mode_dim, right_bond])?;
+          unsafe { ker_arr.reduce_add(reduced_ker)? };
+          let reduced_ker = NDArray::from_mut_slice(&mut reduced_ker_buff, [left_bond, right_bond])?;
+          unsafe { new_agr.matmul_inplace(agr, reduced_ker)? };
+          agr_buff = new_agr_buff;
+          let agr = NDArray::from_mut_slice(&mut agr_buff, [right_bond])?;
+          let norm_sq = unsafe { agr.norm_n_pow_n(2) };
+          unsafe { agr.mul_by_scalar($complex_type::from(norm_sq.powf(-0.5))) };
+          agr_val = agr_val + norm_sq.ln() / 2.;
+        }
+        Ok(Complex::<$real_type>::from(agr_val) + Complex::<$real_type>::from(agr_buff[0]).ln())
       }
 
       /// This method sets a Tensor Train into the left canonical form inplace.
       /// The L2 norm of a Tensor Train after this operation is equal to 1.
-      /// The log norm of the initial Tensor Train is returned.
+      /// The natural logarithm of norm of the initial Tensor Train is returned.
       fn set_into_left_canonical(&mut self) -> TTResult<$real_type> {
         let mut new_left_bond = 1;
         let mut orth_buff = unsafe { $fn_uninit_buff(1) };
@@ -271,7 +305,7 @@ macro_rules! tt_impl {
 
       /// This method sets a Tensor Train into the right canonical form inplace.
       /// The L2 norm of a Tensor Train after this operation is equal to 1.
-      /// The log norm of the initial Tensor Train is returned.
+      /// The natural logarithm of norm of the initial Tensor Train is returned.
       fn set_into_right_canonical(&mut self) -> TTResult<$real_type> {
         let mut new_right_bond = 1;
         let mut orth_buff = unsafe { $fn_uninit_buff(1) };
@@ -310,10 +344,13 @@ macro_rules! tt_impl {
         Ok(lognorm)
       }
 
-      /// This method evaluates an element of a Tensor Train given the index.
-      fn eval_index(&self, index: &[usize]) -> TTResult<$complex_type> {
+      /// This method evaluates a natural logarithm of an element of a Tensor Train given the index.
+      /// The logarithm is necessary to make computation stable, when the value of the
+      /// element is exponentially big or small.
+      fn log_eval_index(&self, index: &[usize]) -> TTResult<Complex<$real_type>> {
         let mut agr_buff = vec![$complex_one; 1];
-        let mut agr = NDArray::from_slice(&agr_buff, [1, 1])?;
+        let mut agr_val = $complex_zero;
+        let mut agr = NDArray::from_mut_slice(&mut agr_buff, [1, 1])?;
         if self.get_len() != index.len() {
           return Err(TTError::IncorrectIndexLength);
         }
@@ -326,8 +363,11 @@ macro_rules! tt_impl {
           unsafe { new_agr.matmul_inplace(agr, subker) }?;
           swap(&mut new_agr_buff, &mut agr_buff);
           agr = new_agr.into();
+          let norm_sq = unsafe { agr.norm_n_pow_n(2) };
+          unsafe { agr.mul_by_scalar($complex_type::from(norm_sq.powf(-0.5))) };
+          agr_val = agr_val + norm_sq.ln() / 2.;
         }
-        Ok(agr_buff[0])
+        Ok(Complex::<$real_type>::from(agr_val) + Complex::<$real_type>::from(agr_buff[0]).ln())
       }
 
       /// This method truncates a left canonical form of a Tensor Train inplace, given an accuracy
