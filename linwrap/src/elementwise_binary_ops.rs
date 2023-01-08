@@ -22,6 +22,9 @@ use crate::{
 
 macro_rules! elementwise_bin_fn {
   ($fn_name:ident, $body:expr) => {
+    /// This method performs a binary operation inplace.
+    /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+    /// as for raw pointers.
     #[inline]
     pub unsafe fn $fn_name(
       self,
@@ -35,7 +38,7 @@ macro_rules! elementwise_bin_fn {
           *other_sh = self_sh;
           *other_st = 0;
         } else if *other_sh != self_sh {
-          return Err(NDArrayError::IncorrectShape);
+          return Err(NDArrayError::BroadcastingError(Box::new(other.shape), Box::new(self.shape)));
         }
       }
       self.into_f_iter().zip(other.into_f_iter()).for_each($body);

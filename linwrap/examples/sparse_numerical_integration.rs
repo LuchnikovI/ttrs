@@ -116,15 +116,15 @@ fn main() {
         let lhs_ones = NDArray::from_slice(&buff_lhs_ones, [1, YGRIDSIZE]).unwrap();
         let mut lhs_buff = vec![0f64; RANK];
         let lhs = NDArray::from_mut_slice(&mut lhs_buff, [1, RANK]).unwrap();
-        lhs.matmul_inplace(lhs_ones, cols, false, true).unwrap();
+        lhs.matmul_inplace(lhs_ones, cols.transpose([1, 0]).unwrap()).unwrap();
         let buff_rhs_ones = vec![1f64; XGRIDSIZE];
         let rhs_ones = NDArray::from_slice(&buff_rhs_ones, [1, XGRIDSIZE]).unwrap();
         let mut rhs_buff = vec![0f64; RANK];
         let rhs = NDArray::from_mut_slice(&mut rhs_buff, [RANK, 1]).unwrap();
-        rhs.matmul_inplace(rows, rhs_ones, false, true).unwrap();
+        rhs.matmul_inplace(rows, rhs_ones.transpose([1, 0]).unwrap()).unwrap();
         let mut result_buff = vec![0f64; 1];
         let result = NDArray::from_mut_slice(&mut result_buff, [1, 1]).unwrap();
-        result.matmul_inplace(lhs, rhs, false, false).unwrap();
+        result.matmul_inplace(lhs, rhs).unwrap();
         let dx = (XEND - XSTART) / XGRIDSIZE as f64;
         let dy = (YEND - YSTART) / YGRIDSIZE as f64;
         println!("Number of the target function calls: {:?}", counter);

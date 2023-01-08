@@ -18,6 +18,7 @@ use crate::{
   ndarray::{
     NDArrayError,
     NDArrayResult,
+    Layout,
   },
   linalg_utils::triangular_split,
 };
@@ -25,7 +26,6 @@ use crate::{
 use num_complex::ComplexFloat;
 
 // TODO: get advantage of the generalized storage (arbitrary strides).
-// TODO: refactor SVD
 // TODO: refactor maxvol
 // TODO: refactor all tests
 // TODO: add documentation
@@ -41,16 +41,30 @@ macro_rules! impl_matmul {
   ($fn_name:ident, $type_name:ident, $alpha:expr, $beta:expr) => {
     impl NDArray<*mut $type_name, 2>
     {
+      /// This method performs the multiplication of matrices a and b and writes
+      /// the result into self.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
       pub unsafe fn matmul_inplace(
         self,
         a: impl Into<NDArray<*const $type_name, 2>>,
         b: impl Into<NDArray<*const $type_name, 2>>,
-        is_a_transposed: bool,
-        is_b_transposed: bool,
       ) -> NDArrayResult<()>
       {
-        let a = a.into();
-        let b = b.into();
+        let mut a = a.into();
+        let mut b = b.into();
+        let is_a_transposed = if let Layout::C = a.layout {
+          a = a.transpose([1, 0])?;
+          true
+        } else {
+          false
+        };
+        let is_b_transposed = if let Layout::C = b.layout {
+          b = b.transpose([1, 0])?;
+          true
+        } else {
+          false
+        };
         if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
         if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
         if a.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
@@ -60,16 +74,16 @@ macro_rules! impl_matmul {
         } else {
           (a.shape[0] as c_int, a.shape[1] as c_int)
         };
-        let n = if is_b_transposed {
-          if b.shape[1] as c_int != k { return Err(NDArrayError::IncorrectShape) }
+        let n = if is_b_transposed  {
+          if b.shape[1] as c_int != k { return Err(NDArrayError::MatmulDimMismatch(b.shape[1], k as usize)) }
           b.shape[0] as c_int
         } else {
-          if b.shape[0] as c_int != k { return Err(NDArrayError::IncorrectShape) }
+          if b.shape[0] as c_int != k { return Err(NDArrayError::MatmulDimMismatch(b.shape[0], k as usize)) }
           b.shape[1] as c_int
         };
         let transa = if is_a_transposed { 'T' as c_char } else { 'N' as c_char };
         let transb = if is_b_transposed { 'T' as c_char } else { 'N' as c_char };
-        if (m != self.shape[0] as c_int) && (n != self.shape[1] as c_int) { return Err(NDArrayError::IncorrectShape); }
+        if (m != self.shape[0] as c_int) || (n != self.shape[1] as c_int) { return Err(NDArrayError::IncorrectShape(Box::new(self.shape), Box::new([m as usize, n as usize]))); }
         let alpha = $alpha;
         let beta = $beta;
         let lda = a.strides[1] as c_int;
@@ -94,6 +108,11 @@ macro_rules! impl_solve {
   ($fn_name:ident, $type_name:ident) => {
     impl NDArray<*mut $type_name, 2>
     {
+      /// This method solves a batch of systems of linear equations,
+      /// i.e. AX = B, where B is rhs, A is self. The solution X is written
+      /// to the rhs array. The array self is destroyed after a call of the method.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
       pub unsafe fn solve(
         self,
         rhs: NDArray<*mut $type_name, 2>,
@@ -103,9 +122,9 @@ macro_rules! impl_solve {
           if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
           if rhs.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
           if rhs.strides[1] < rhs.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-          if self.shape[1] != self.shape[0] { return Err(NDArrayError::IncorrectShape); }
+          if self.shape[1] != self.shape[0] { return Err(NDArrayError::SquareMatrixRequired(self.shape[0], self.shape[1])); }
           let n = self.shape[1] as c_int;
-          if rhs.shape[0] as c_int != n { return Err(NDArrayError::IncorrectShape); }
+          if rhs.shape[0] as c_int != n { return Err(NDArrayError::IncorrectShape(Box::new(rhs.shape), Box::new([n as usize, rhs.shape[1]]))); }
           let nrhs = rhs.shape[1] as c_int;
           let lda = self.strides[1] as c_int;
           let ldb = rhs.strides[1] as c_int;
@@ -140,11 +159,16 @@ impl_solve!(zgesv_, Complex64);
 macro_rules! impl_svd {
   ($fn_name:ident, $type_name:ident, $complex_type_name:ident, $complex_zero:expr, $complex_to_real_fn:expr) => {
     impl NDArray<*mut $complex_type_name, 2> {
+      /// This method performs computation of the SVD of self matrix.
+      /// The result is written in u, lmbd and vdag arrays.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
       pub unsafe fn svd(
         self,
         u: NDArray<*mut $complex_type_name, 2>,
+        lmbd: NDArray<*mut $type_name, 1>,
         vdag: NDArray<*mut $complex_type_name, 2>,
-      ) -> NDArrayResult<Vec<$type_name>>
+      ) -> NDArrayResult<()>
       {
         if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
         if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
@@ -152,6 +176,7 @@ macro_rules! impl_svd {
         if u.strides[1] < u.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
         if vdag.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
         if vdag.strides[1] < vdag.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+        if lmbd.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
         let jobu = 'S' as c_char;
         let jobvt = 'S' as c_char;
         let m = self.shape[0] as c_int;
@@ -160,10 +185,9 @@ macro_rules! impl_svd {
         let ldu = u.strides[1] as c_int;
         let ldvt = vdag.strides[1] as c_int;
         let min_dim = std::cmp::min(n, m);
-        if (u.shape[0] as c_int != m) && (u.shape[1] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape); }
-        if (vdag.shape[1] as c_int != n) && (vdag.shape[0] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape); }
-        let mut s: Vec<$type_name> = Vec::with_capacity(min_dim as usize);
-        unsafe { s.set_len(min_dim as usize); }
+        if lmbd.shape[0] as c_int != min_dim { return Err(NDArrayError::IncorrectShape(Box::new(lmbd.shape), Box::new([min_dim as usize]))); }
+        if (u.shape[0] as c_int != m) || (u.shape[1] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape(Box::new(u.shape), Box::new([m as usize, min_dim as usize]))); }
+        if (vdag.shape[1] as c_int != n) || (vdag.shape[0] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape(Box::new(vdag.shape), Box::new([min_dim as usize, n as usize]))); }
         let lwork = -1  as c_int;
         let mut work = $complex_zero;
         let mut rwork = Vec::with_capacity(5 * min_dim as usize);
@@ -177,7 +201,7 @@ macro_rules! impl_svd {
           &n,
           self.ptr,
           &lda,
-          s.as_mut_ptr(),
+          lmbd.ptr,
           u.ptr,
           &ldu,
           vdag.ptr,
@@ -195,7 +219,7 @@ macro_rules! impl_svd {
           &n,
           self.ptr,
           &lda,
-          s.as_mut_ptr(),
+          lmbd.ptr,
           u.ptr,
           &ldu,
           vdag.ptr,
@@ -205,7 +229,7 @@ macro_rules! impl_svd {
           rwork.as_mut_ptr(),
           &mut info) }
         if info != 0 { return Err(NDArrayError::ErrorGESVD(info)); }
-        Ok(s)
+        Ok(())
       }
     }
   };
@@ -314,6 +338,13 @@ impl_householder_to_q!(zungqr_, Complex64, Complex64::new(0., 0.), |x: Complex64
 macro_rules! impl_qr {
   ($type_name:ident) => {
     impl NDArray<*mut $type_name, 2> {
+      /// This method performes QR deomposition of a self matrix of size m x n.
+      /// A matrix other is an auxiliary matrix of size min(m, n) x min(m, n).
+      /// If m > n the resultin Q matrix is written to self array and R matrix is
+      /// written to other array. Otherwise, Q is written to other array, R is
+      /// written to self array.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
       pub unsafe fn qr(
         mut self,
         other: Self,
@@ -322,8 +353,7 @@ macro_rules! impl_qr {
         let m = self.shape[0];
         let n = self.shape[1];
         let min_dim = std::cmp::min(n, m);
-        if other.shape[1] != min_dim { return Err(NDArrayError::IncorrectShape); }
-        if other.shape[0] != min_dim { return Err(NDArrayError::IncorrectShape); }
+        if other.shape != [min_dim, min_dim] { return Err(NDArrayError::SquareMatrixRequired(other.shape[0], other.shape[1])); }
         let mut tau = Vec::with_capacity(min_dim);
         unsafe { tau.set_len(min_dim); }
         unsafe { self.householder_(tau.as_mut_ptr())?; }
@@ -344,6 +374,38 @@ impl_qr!(f64      );
 impl_qr!(Complex32);
 impl_qr!(Complex64);
 
+macro_rules! impl_rq {
+  ($type_name:ident) => {
+    impl NDArray<*mut $type_name, 2> {
+      /// This method performes RQ deomposition of a self matrix of size m x n.
+      /// A matrix other is an auxiliary matrix of size min(m, n) x min(m, n).
+      /// If m < n the resultin Q matrix is written to self array and R matrix is
+      /// written to other array. Otherwise, Q is written to other array, R is
+      /// written to self array.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
+      pub unsafe fn rq(
+        self,
+        other: Self,
+      ) -> NDArrayResult<()>
+      {
+        // TODO: to avoid extra allocations and copying use dedicated routines for rq decomposition
+        let (mut _self_transposed_buff, self_transposed_arr) = self.transpose([1, 0])?.gen_f_array();
+        let (mut _other_transposed_buff, other_transposed_arr) = other.transpose([1, 0])?.gen_f_array();
+        self_transposed_arr.qr(other_transposed_arr)?;
+        self_transposed_arr.transpose([1, 0])?.write_to(self)?;
+        other_transposed_arr.transpose([1, 0])?.write_to(other)?;
+        Ok(())
+      }
+    }
+  };
+}
+
+impl_rq!(f32      );
+impl_rq!(f64      );
+impl_rq!(Complex32);
+impl_rq!(Complex64);
+
 macro_rules! impl_rank1_update {
   ($fn_name:ident, $type_name:ident) => {
     impl NDArray<*mut $type_name, 2> {
@@ -356,14 +418,14 @@ macro_rules! impl_rank1_update {
       {
         let col = col.into();
         let row = row.into();
-        if col.shape[1] != 1 { return Err(NDArrayError::IncorrectShape); }
-        if row.shape[0] != 1 { return Err(NDArrayError::IncorrectShape); }
+        if col.shape[1] != 1 { panic!("col matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [self.shape[0], 1]) }
+        if row.shape[0] != 1 { panic!("row matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [1, self.shape[1]]) }
         if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
         if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
         let m = self.shape[0] as c_int;
         let n = self.shape[1] as c_int;
-        if col.shape[0] != m as usize { return Err(NDArrayError::IncorrectShape); }
-        if row.shape[1] != n as usize { return Err(NDArrayError::IncorrectShape); }
+        if col.shape[0] != m as usize { panic!("col matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [self.shape[0], 1]) }
+        if row.shape[1] != n as usize { panic!("row matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [1, self.shape[1]]) }
         let incx = col.strides[0] as c_int;
         let incy = row.strides[1] as c_int;
         let lda = self.strides[1] as c_int;
@@ -382,12 +444,19 @@ impl_rank1_update!(zgeru_, Complex64);
 macro_rules! impl_maxvol {
   ($complex_type_name:ident, $type_name:ident, $complex_one:expr, $complex_zero:expr) => {
     impl NDArray<*mut $complex_type_name, 2> {
+      /// This method runs Maxvol algorithm for a matrix self of size m x n, where m <= n.
+      /// It returns the order of collumns that corrseponds to the right most part of the matrix
+      /// to be a dominant submatrix with accuracy delta. The self matrix is rewritten by the
+      /// matrix that has reshaffeled collumns according to the obtained columns order and
+      /// multiplied by the inverse dominant part from the right.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
       pub unsafe fn maxvol(self, delta: $type_name) -> NDArrayResult<Vec<usize>> {
         let m = self.shape[0];
         let n = self.shape[1];
         if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
         if self.strides[1] < m { return Err(NDArrayError::MutableElementsOverlapping); }
-        if m > n { return Err(NDArrayError::IncorrectShape); }
+        if m > n { return Err(NDArrayError::MaxvolInputSizeMismatch(m, n)); }
         let mut order: Vec<usize> = (0..n).collect();
         let mut x_buff: Vec<$complex_type_name> = Vec::with_capacity(m);
         unsafe { x_buff.set_len(m); }
@@ -447,6 +516,8 @@ use num_complex::{
     eye_f64,
     eye_c32,
     eye_c64,
+    uninit_buff_f32,
+    uninit_buff_f64,
   };
   use ndarray::Array;
   use ndarray_einsum_beta::einsum;
@@ -464,12 +535,12 @@ use num_complex::{
         let einsum_c = NDArray::from_slice(&einsum_c, [m, n]).unwrap();
 
         let a = NDArray::from_slice(buff_a.as_slice_memory_order().unwrap(), [k, m]).unwrap();
-        let a = if $is_a_transposed { a } else { a.reshape([m, k]).unwrap() };
+        let a = if $is_a_transposed { a.transpose([1, 0]).unwrap() } else { a.reshape([m, k]).unwrap() };
         let b = NDArray::from_slice(buff_b.as_slice_memory_order().unwrap(), [n, k]).unwrap();
-        let b = if $is_b_transposed { b } else { b.reshape([k, n]).unwrap() };
+        let b = if $is_b_transposed { b.transpose([1, 0]).unwrap() } else { b.reshape([k, n]).unwrap() };
         let mut buff_c: Vec<$type_name> = vec![Default::default(); m * n];
         let c = NDArray::from_mut_slice(buff_c.as_mut_slice(), [m, n]).unwrap();
-        c.matmul_inplace(a, b, $is_a_transposed, $is_b_transposed).unwrap();
+        c.matmul_inplace(a, b).unwrap();
         c.sub_inpl(einsum_c).unwrap();
         assert!(c.norm_n_pow_n(2) < 1e-5);
       };
@@ -506,7 +577,7 @@ use num_complex::{
       let x = NDArray::from_slice(buff_x.as_slice(), [n, nrhs]).unwrap();
       let mut buff_b = $gen_fn(n * nrhs);
       let b = NDArray::from_mut_slice(buff_b.as_mut_slice(), [n, nrhs]).unwrap();
-      b.matmul_inplace(a, x, false, false).unwrap();
+      b.matmul_inplace(a, x).unwrap();
       let a = NDArray::from_mut_slice(buff_a.as_mut_slice(), [n, n]).unwrap();
       a.solve(b).unwrap();
       let b = NDArray::from_mut_slice(buff_b.as_mut_slice(), [n, nrhs]).unwrap();
@@ -526,7 +597,7 @@ use num_complex::{
   }
 
   macro_rules! test_svd {
-    ($sizes:expr, $gen_fn:ident, $complex_init:expr) => {
+    ($sizes:expr, $gen_fn:ident, $lmbd_uninit_function:ident, $complex_init:expr) => {
       let (m, n) = $sizes;
       let min_dim = std::cmp::min(m, n);
       let mut buff_a = $gen_fn(m * n);
@@ -537,7 +608,9 @@ use num_complex::{
       let u = NDArray::from_mut_slice(buff_u.as_mut_slice(), [m, min_dim]).unwrap();
       let mut buff_vdag = $gen_fn(min_dim * n);
       let vdag = NDArray::from_mut_slice(buff_vdag.as_mut_slice(), [min_dim, n]).unwrap();
-      let s_buff = a.svd(u, vdag).unwrap();
+      let mut s_buff = $lmbd_uninit_function(min_dim);
+      let s = NDArray::from_mut_slice(&mut s_buff, [min_dim]).unwrap();
+      a.svd(u, s, vdag).unwrap();
       // Here we check that s is non-negative
       assert!(s_buff.iter().all(|x| *x >= 0. ));
       // Here we check isometric property of u and v
@@ -551,8 +624,8 @@ use num_complex::{
       let udag_u = NDArray::from_mut_slice(buff_udag_u.as_mut_slice(), [min_dim, min_dim]).unwrap();
       let u = NDArray::from_slice(buff_u.as_slice(), [m, min_dim]).unwrap();
       let vdag = NDArray::from_slice(buff_vdag.as_slice(), [min_dim, n]).unwrap();
-      v_vdag.matmul_inplace(vdag, v_copy, false, true).unwrap();
-      udag_u.matmul_inplace(udag_copy, u, true, false).unwrap();
+      v_vdag.matmul_inplace(vdag, v_copy.transpose([1, 0]).unwrap()).unwrap();
+      udag_u.matmul_inplace(udag_copy.transpose([1, 0]).unwrap(), u).unwrap();
       let mut eye_buff = vec![$complex_init(0., 0.); min_dim * min_dim];
       for i in 0..(min_dim) {
         eye_buff[i * (min_dim + 1)] = $complex_init(1., 0.);
@@ -570,7 +643,7 @@ use num_complex::{
       let lhs = NDArray::from_mut_slice(&mut buff_u, [m, min_dim]).unwrap();
       let rhs = NDArray::from_slice(&buff_vdag, [min_dim, n]).unwrap();
       lhs.mul_inpl(s).unwrap();
-      result.matmul_inplace(lhs, rhs, false, false).unwrap();
+      result.matmul_inplace(lhs, rhs).unwrap();
       result.sub_inpl(a_copy).unwrap();
       assert!(result.norm_n_pow_n(2) < 1e-5);
     };
@@ -579,14 +652,14 @@ use num_complex::{
   #[test]
   fn test_svd() {
     unsafe {
-      test_svd!((10, 15), random_normal_f32,  |x, _| x as f32            );
-      test_svd!((10, 15), random_normal_f64,  |x, _| x as f64            );
-      test_svd!((10, 15), random_normal_c32,  |x, y| Complex32::new(x, y));
-      test_svd!((10, 15), random_normal_c64, |x, y| Complex64::new(x, y));
-      test_svd!((15, 10), random_normal_f32,  |x, _| x as f32            );
-      test_svd!((15, 10), random_normal_f64,  |x, _| x as f64            );
-      test_svd!((15, 10), random_normal_c32,  |x, y| Complex32::new(x, y));
-      test_svd!((15, 10), random_normal_c64, |x, y| Complex64::new(x, y));
+      test_svd!((10, 15), random_normal_f32, uninit_buff_f32,  |x, _| x as f32            );
+      test_svd!((10, 15), random_normal_f64, uninit_buff_f64,  |x, _| x as f64            );
+      test_svd!((10, 15), random_normal_c32, uninit_buff_f32,  |x, y| Complex32::new(x, y));
+      test_svd!((10, 15), random_normal_c64, uninit_buff_f64,  |x, y| Complex64::new(x, y));
+      test_svd!((15, 10), random_normal_f32, uninit_buff_f32,  |x, _| x as f32            );
+      test_svd!((15, 10), random_normal_f64, uninit_buff_f64,  |x, _| x as f64            );
+      test_svd!((15, 10), random_normal_c32, uninit_buff_f32,  |x, y| Complex32::new(x, y));
+      test_svd!((15, 10), random_normal_c64, uninit_buff_f64,  |x, y| Complex64::new(x, y));
     }
   }
 
@@ -610,13 +683,13 @@ use num_complex::{
       q_dag.conj();
       let mut buff_result = $gen_fn(min_dim * min_dim);
       let result = NDArray::from_mut_slice(&mut buff_result, [min_dim, min_dim]).unwrap();
-      result.matmul_inplace(q_dag, q, true, false).unwrap();
+      result.matmul_inplace(q_dag.transpose([1, 0]).unwrap(), q).unwrap();
       result.sub_inpl(eye).unwrap();
       assert!(result.norm_n_pow_n(2) < 1e-5);
       // Here we check the correctness of the decomposition
       let mut result_buff = $gen_fn(m * n);
       let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
-      result.matmul_inplace(q, r, false, false).unwrap();
+      result.matmul_inplace(q, r).unwrap();
       result.sub_inpl(a_copy).unwrap();
       assert!(result.norm_n_pow_n(2) < 1e-5);
     };
@@ -633,6 +706,52 @@ use num_complex::{
       test_qr!((10, 5), random_normal_f64, eye_f64);
       test_qr!((10, 5), random_normal_c32, eye_c32);
       test_qr!((10, 5), random_normal_c64, eye_c64);
+    }
+  }
+
+  macro_rules! test_rq {
+    ($sizes:expr, $gen_fn:ident, $eye_fn:ident) => {
+      let (m, n) = $sizes;
+      let min_dim = std::cmp::min(m, n);
+      let mut buff_a = $gen_fn(m * n);
+      let buff_a_copy = buff_a.clone();
+      let a = NDArray::from_mut_slice(&mut buff_a, [m, n]).unwrap();
+      let a_copy = NDArray::from_slice(&buff_a_copy, [m, n]).unwrap();
+      let mut buff_other = $gen_fn(min_dim * min_dim);
+      let other = NDArray::from_mut_slice(&mut buff_other, [min_dim, min_dim]).unwrap();
+      a.rq(other).unwrap();
+      let (r, q) = if m < n { (other, a) } else { (a, other) };
+      // Here we check the isometric property of q;
+      let eye_buff = $eye_fn(min_dim);
+      let eye = NDArray::from_slice(&eye_buff, [min_dim, min_dim]).unwrap();
+      let (mut _buff_q_dag, q_dag) = q.gen_f_array();
+      //let q_dag = NDArray::from_mut_slice(&mut buff_q_dag, [m, min_dim]).unwrap();
+      q_dag.conj();
+      let mut buff_result = $gen_fn(min_dim * min_dim);
+      let result = NDArray::from_mut_slice(&mut buff_result, [min_dim, min_dim]).unwrap();
+      result.matmul_inplace(q, q_dag.transpose([1, 0]).unwrap()).unwrap();
+      result.sub_inpl(eye).unwrap();
+      assert!(result.norm_n_pow_n(2) < 1e-5);
+      // Here we check the correctness of the decomposition
+      let mut result_buff = $gen_fn(m * n);
+      let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
+      result.matmul_inplace(r, q).unwrap();
+      result.sub_inpl(a_copy).unwrap();
+      assert!(result.norm_n_pow_n(2) < 1e-5);
+    };
+  }
+
+  #[test]
+  fn test_rq() {
+    unsafe {
+      test_rq!((5, 10), random_normal_f32, eye_f32);
+      test_rq!((5, 10), random_normal_f64, eye_f64);
+      test_rq!((5, 10), random_normal_c32, eye_c32);
+      test_rq!((5, 10), random_normal_c64, eye_c64);
+      test_rq!((10, 5), random_normal_f32, eye_f32);
+      test_rq!((10, 5), random_normal_f64, eye_f64);
+      test_rq!((10, 5), random_normal_c32, eye_c32);
+      test_rq!((10, 5), random_normal_c64, eye_c64);
     }
   }
 

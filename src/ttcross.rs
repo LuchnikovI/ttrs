@@ -30,10 +30,7 @@ use crate::utils::{
   indices_prod,
 };
 
-use crate::tt::{
-  TTResult,
-  TensorTrain,
-};
+use crate::tt_traits::TTResult;
 
 #[derive(Debug, Clone, Copy)]
 enum DMRGState {
@@ -45,28 +42,17 @@ enum DMRGState {
 pub struct CrossBuilder<T: ComplexFloat> {
   left_indices: Vec<Vec<Vec<usize>>>,
   right_indices: Vec<Vec<Vec<usize>>>,
-  kernels: Vec<Vec<T>>,
-  right_bonds: Vec<usize>,
-  left_bonds:  Vec<usize>,
-  mode_dims: Vec<usize>,
+  pub(super) kernels: Vec<Vec<T>>,
+  pub(super) right_bonds: Vec<usize>,
+  pub(super) left_bonds:  Vec<usize>,
+  pub(super) mode_dims: Vec<usize>,
   cur_ker: usize,
   dmrg_state: DMRGState,
   delta: T::Real,
 }
 
-impl<T: ComplexFloat> CrossBuilder<T> {
-  pub(super) fn to_tt(self) -> TensorTrain<T> {
-    TensorTrain {
-      kernels: self.kernels,
-      right_bonds: self.right_bonds,
-      left_bonds: self.left_bonds,
-      mode_dims: self.mode_dims,
-    }
-  }
-}
-
 macro_rules! impl_cross_builder {
-  ($complex_type:ty, $real_type:ty, $fn_gen:ident) => {
+  ($complex_type:ty, $real_type:ty, $tt_trait:ident, $fn_gen:ident) => {
     impl CrossBuilder<$complex_type> {
       pub(super) fn new(
         rank: usize,
@@ -96,10 +82,10 @@ macro_rules! impl_cross_builder {
   };
 }
 
-impl_cross_builder!(f32,       f32, random_normal_f32);
-impl_cross_builder!(f64,       f64, random_normal_f64);
-impl_cross_builder!(Complex32, f32, random_normal_c32);
-impl_cross_builder!(Complex64, f64, random_normal_c64);
+impl_cross_builder!(f32,       f32, TTf32, random_normal_f32);
+impl_cross_builder!(f64,       f64, TTf64, random_normal_f64);
+impl_cross_builder!(Complex32, f32, TTc32, random_normal_c32);
+impl_cross_builder!(Complex64, f64, TTc64, random_normal_c64);
 
 macro_rules! impl_next {
   ($complex_type:ty, $fn_uninit_buff:ident, $fn_eye:ident) => {
@@ -125,19 +111,16 @@ macro_rules! impl_next {
                 self.left_indices[cur_ker + 1] = indices_prod(&self.left_indices[cur_ker], &local_indices);
                 self.cur_ker += 1;
               } else {
-                let mut m_buff_trans: Vec<_> = right_indices_ref.into_par_iter().flat_map(|rhs| {
-                  (&left_indices).into_par_iter().map(|lhs| {
+                let mut m_buff: Vec<_> = (&left_indices).into_par_iter().flat_map(|lhs| {
+                  right_indices_ref.into_par_iter().map(|rhs| {
                     let index: Vec<_> = lhs.into_iter().chain(rhs.into_iter()).map(|x| *x).collect();
                     f(&index[..])
                   })
                 }).collect();
-                let m_trans = NDArray::from_mut_slice(&mut m_buff_trans, [left_bond * dim, right_bond])?;
+                let m = NDArray::from_mut_slice(&mut m_buff, [right_bond, left_bond * dim])?;
                 let mut aux_buff = unsafe { $fn_uninit_buff(right_bond.pow(2)) };
                 let aux = NDArray::from_mut_slice(&mut aux_buff, [right_bond, right_bond])?;
-                unsafe { m_trans.qr(aux)? };  // TODO: turn to the RQ decomposition in order to avoid transposition and extra allocation
-                let mut m_buff = unsafe { $fn_uninit_buff(m_buff_trans.len()) };
-                let m = NDArray::from_mut_slice(&mut m_buff, [right_indices_ref.len(), left_indices.len()])?;
-                unsafe { m_trans.transpose([1, 0])?.write_to(m)? };
+                unsafe { m.rq(aux)? };
                 let mut order = unsafe { m.maxvol(self.delta)? };
                 let mut reverse_order = Vec::with_capacity(order.len());
                 unsafe { reverse_order.set_len(order.len()) };
@@ -166,19 +149,16 @@ macro_rules! impl_next {
                 self.right_indices[cur_ker - 1] = indices_prod(&local_indices, &self.right_indices[cur_ker]);
                 self.cur_ker -= 1;
               } else {
-                let mut m_buff_trans: Vec<_> = left_indices_ref.into_par_iter().flat_map(|lhs| {
-                  (&right_indices).into_par_iter().map(|rhs| {
+                let mut m_buff: Vec<_> = (&right_indices).into_par_iter().flat_map(|rhs| {
+                  left_indices_ref.into_par_iter().map(|lhs| {
                     let index: Vec<_> = lhs.into_iter().chain(rhs.into_iter()).map(|x| *x).collect();
                     f(&index[..])
                   })
                 }).collect();
-                let m_trans = NDArray::from_mut_slice(&mut m_buff_trans, [right_indices.len(), left_indices_ref.len()])?;
+                let m = NDArray::from_mut_slice(&mut m_buff, [left_bond, right_bond * dim])?;
                 let mut aux_buff = unsafe { $fn_uninit_buff(left_indices_ref.len().pow(2)) };
                 let aux = NDArray::from_mut_slice(&mut aux_buff, [left_indices_ref.len(), left_indices_ref.len()])?;
-                unsafe { m_trans.qr(aux)? };  // TODO: turn to the RQ decomposition in order to avoid transposition and extra allocation
-                let mut m_buff = unsafe { $fn_uninit_buff(m_buff_trans.len()) };
-                let m = NDArray::from_mut_slice(&mut m_buff, [left_indices_ref.len(), right_indices.len()])?;
-                unsafe { m_trans.transpose([1, 0])?.write_to(m)? };
+                unsafe { m.qr(aux)? };
                 let mut order = unsafe { m.maxvol(self.delta)? };
                 let mut reverse_order = Vec::with_capacity(order.len());
                 unsafe { reverse_order.set_len(order.len()) };
@@ -207,6 +187,13 @@ impl_next!(Complex64, uninit_buff_c64, eye_c64);
 #[cfg(test)]
 mod tests {
   use super::CrossBuilder;
+  use crate::tt_vec::TTVec;
+  use crate::tt_traits::{
+    TTf32,
+    TTf64,
+    TTc32,
+    TTc64,
+  };
   use num_complex::{
     Complex32,
     Complex64,
@@ -238,7 +225,7 @@ mod tests {
       for _ in 0..(4 * 20) {
         builder.next(cos_sqrt).unwrap();
       }
-      let mut tt = builder.to_tt();
+      let mut tt = TTVec::<$complex_type>::from_cross_builder(builder);
       let log_norm = tt.set_into_left_canonical().unwrap();
       let tt_based = (2. * log_norm - 19. * (2 as $real_type).ln()).exp();
       let exact = 2. * (1 as $real_type).sin();
@@ -246,7 +233,7 @@ mod tests {
       tt.truncate_left_canonical(1e-6).unwrap();
       let mut tt_conj = tt.clone();
       tt_conj.conj();
-      tt.prod(&tt_conj).unwrap();
+      tt.elementwise_prod(&tt_conj).unwrap();
       //tt.set_into_left_canonical().unwrap();
       //tt.truncate_left_canonical(1e-5).unwrap();
       let index1 = [1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0];

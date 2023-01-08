@@ -7,6 +7,9 @@ use crate::NDArray;
 
 macro_rules! elementwise_fn {
   ($fn_name:ident, $body:expr) => {
+    /// This method performs a unary operation inplace.
+    /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+    /// as for raw pointers.
     #[inline]
     pub unsafe fn $fn_name(self)
     {

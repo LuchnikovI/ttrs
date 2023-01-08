@@ -1,7 +1,10 @@
 use std::collections::HashSet;
 
 use rand::{thread_rng, Rng};
-use ttrs::ttcross_f64;
+use ttrs::{
+    TTVec,
+    TTf64,
+};
 
 #[derive(Clone, Debug)]
 struct Rules(Vec<Vec<Vec<(usize, f64)>>>);
@@ -106,7 +109,7 @@ fn main() {
     let mut rng = thread_rng();
     let mode_dims = [4; 50];
     let sweeps_num = 4;
-    let mut tt = ttcross_f64(&mode_dims, 50, 0.0001, |x| unsafe { run_mdp(x) }, sweeps_num).unwrap();
+    let mut tt = TTVec::<f64>::ttcross(&mode_dims, 50, 0.0001, |x| unsafe { run_mdp(x) }, sweeps_num).unwrap();
     println!("Exact reward value vs predicted:");
     for _ in 0..10 {
         let random_seq: Vec<_> = (0..50).map(|_| { rng.gen::<usize>() % 4 }).collect();
@@ -117,11 +120,6 @@ fn main() {
     println!("Bond dimensions:");
     println!("{:?}", tt.get_bonds());
     println!("vs number of possible states: 37.");
-    let tt_clone = tt.clone();
-    tt.prod(&tt_clone).unwrap();
-    tt.set_into_left_canonical().unwrap();
-    tt.truncate_left_canonical(1e-2).unwrap();
-    println!("{:?}", tt.get_bonds());
 }
 
 #[cfg(test)]

@@ -31,28 +31,45 @@ pub(super) enum Layout {
 
 // ---------------------------------------------------------------------- //
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum NDArrayError {
 
   /// This error appears when the layout of an array in memory disallows
   /// reshaping without copying 
   ImpossibleToReshape,
 
-  /// This error appears when the total number of elements in an array is incorrect
-  IncorrectSize,
+  /// This error appears when sizes of two arrays are different while it is required them to be
+  /// equal
+  SizeMismatch(usize, usize),
 
   /// This error appears when one requires access an index that is out of array bounds
-  OutOfBound,
+  OutOfBound(Box<[usize]>, usize, usize),
 
-  /// This error appears when shapes of arrays do not match each other
-  IncorrectShape,
+  /// This error appears when shapes of arrays do not match each other while it is required them to be
+  ShapesMismatch(Box<[usize]>, Box<[usize]>),
+
+  /// This error appears when a given shape does not match a required one
+  IncorrectShape(Box<[usize]>, Box<[usize]>),
+
+  /// This error appears when one requires a square matrix but a rectangular one is given
+  SquareMatrixRequired(usize, usize),
+
+  /// This error appears when one can not perform matrix multiplication
+  /// due to the mismatch of dimensions
+  MatmulDimMismatch(usize, usize),
+
+  /// This error appears when one sends a matrix of incorrect size to the Maxvol algorithm
+  MaxvolInputSizeMismatch(usize, usize),
+
+  /// This error appears when broadcasting is impossible
+  BroadcastingError(Box<[usize]>, Box<[usize]>),
 
   /// This error appears when it is required for array to be contiguous in memory
   /// but it is not
   NotContiguous,
 
   /// This error appears when one try to transpose an array with an incorrect indices order
-  IncorrectIndicesOrder,
+  IncorrectIndicesOrder(Box<[usize]>),
 
   /// This error appears when the linear solve lapack routine ?gesv fails.
   ErrorGESV(c_int),
@@ -76,6 +93,31 @@ pub enum NDArrayError {
 
   /// This error appears when one passes an incorrect range as a sub-array specification 
   IncorrectRange,
+}
+
+impl Debug for NDArrayError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      match self {
+        NDArrayError::ImpossibleToReshape => { f.write_str("Layout of an array disallows reshape operation without copying.") },
+        NDArrayError::SizeMismatch(lhs, rhs) => { f.write_str(&format!("Mismatch of arrays sizes: size1 = {}, size2 = {}.", lhs, rhs)) },
+        NDArrayError::OutOfBound(shape, num, idx) => { f.write_str(&format!("Index {} of an array of shape {:?} at mode number {} is out of bound.", idx, &shape[..], num)) },
+        NDArrayError::ShapesMismatch(shape1, shape2) => { f.write_str(&format!("Shape {:?} and shape {:?} are not equal.", &shape1[..], &shape2[..])) },
+        NDArrayError::IncorrectShape(shape_given, shape_required) => { f.write_str(&format!("Given shape {:?} does not match the required one {:?}.", &shape_given[..], &shape_required[..])) },
+        NDArrayError::SquareMatrixRequired(m, n) => { f.write_str(&format!("Square matrix is required, given matrix of shape {:?}.", [m, n])) },
+        NDArrayError::MatmulDimMismatch(m, n) => { f.write_str(&format!("Impossible to perform matrix multiplication along indices of different dimensions. Given dimensions {}, {}.", m, n)) },
+        NDArrayError::MaxvolInputSizeMismatch(m, n) => { f.write_str(&format!("Number of columns of a Maxvol algorithm input must be >= than number of rows. Given number of columns {}, number of rows {}.", n, m))},
+        NDArrayError::BroadcastingError(shape1, shape2) => { f.write_str(&format!("Impossible to broadcast arrays of shapes {:?} and {:?}.", &shape1[..], &shape2[..]))},
+        NDArrayError::NotContiguous => { f.write_str("Array is not contiguous in memory.")},
+        NDArrayError::IncorrectIndicesOrder(order) => { f.write_str(&format!("Incorrect transposition specification {:?}.", order)) },
+        NDArrayError::ErrorGESV(code) => { f.write_str(&format!("Lapack linear systems solver (?GESV) failed with code {}.", code)) },
+        NDArrayError::ErrorGESVD(code) => { f.write_str(&format!("Lapack SVD routine (?GESVD) failed with code {}.", code)) },
+        NDArrayError::ErrorGEQRF(code) => { f.write_str(&format!("Lapack QR decomposition routine (?GEQRF) failed with code {}.", code)) },
+        NDArrayError::ErrorORGQR(code) => { f.write_str(&format!("Lapac routine for QR decomposition result postprocessing (?ORGQR) failed with code {}", code)) },
+        NDArrayError::FortranLayoutRequired => { f.write_str("Array has non-Fortran layout.")},
+        NDArrayError::MutableElementsOverlapping => { f.write_str("Strides and a shape allows mutable elements overlapping.") },
+        NDArrayError::IncorrectRange => { f.write_str("Invalid range for sub-array specification.")},
+      }
+  }
 }
 
 pub type NDArrayResult<T> = Result<T, NDArrayError>;
@@ -124,7 +166,7 @@ where
     size: usize,
   ) -> NDArrayResult<(Self, Self)>
   {
-    if size > self.shape[axis] { return Err(NDArrayError::OutOfBound); }
+    if size > self.shape[axis] { return Err(NDArrayError::OutOfBound(Box::new(self.shape), axis, size)); }
     let lhs_ptr = self.ptr;
     let rhs_ptr = self.ptr.add(self.strides[axis] * size);
     let mut lhs_shape = self.shape;
@@ -144,7 +186,7 @@ where
     for (i, r) in bounds.into_iter().enumerate() {
       let (start, end) = (r.start, r.end);
       if start > end { return Err(NDArrayError::IncorrectRange); }
-      if end > self.shape[i] { return Err(NDArrayError::OutOfBound); }
+      if end > self.shape[i] { return Err(NDArrayError::OutOfBound(Box::new(self.shape), i, end)); }
       self.ptr = self.ptr.add(self.strides[i] * start);
       self.shape[i] = end - start;
     }
@@ -160,7 +202,7 @@ where
   {
     let new_size: usize = shape.into_iter().product();
     let old_size: usize = self.shape.into_iter().product();
-    if old_size != new_size { return Err(NDArrayError::IncorrectSize); }
+    if old_size != new_size { return Err(NDArrayError::SizeMismatch(old_size, new_size)); }
     if !self.is_contiguous { return Err(NDArrayError::ImpossibleToReshape); }
     let strides = if let Some(s) = shape_to_strides(shape, self.layout) {
       s
@@ -178,10 +220,11 @@ where
 
   /// This method transposes an array.
   pub fn transpose(mut self, axes_order: [usize; N]) -> NDArrayResult<Self> {
+    if axes_order.into_iter().enumerate().all(|(o, i)| o == i) { return Ok(self); }
     let mut sorted_axes_order = axes_order;
     sorted_axes_order.sort();
     for (i, o) in sorted_axes_order.into_iter().enumerate() {
-      if i != o { return Err(NDArrayError::IncorrectIndicesOrder); }
+      if i != o { return Err(NDArrayError::IncorrectIndicesOrder(Box::new(axes_order))); }
     }
     let mut new_shape = self.shape;
     let mut new_strides = self.strides;
@@ -191,7 +234,15 @@ where
     }
     self.shape = new_shape;
     self.strides = new_strides;
-    self.layout = Layout::General;
+    self.layout = if axes_order.into_iter().rev().enumerate().all(|(o, i)| o == i) {
+      match self.layout {
+        Layout::Fortran => Layout::C,
+        Layout::C => Layout::Fortran,
+        Layout::General => Layout::General,
+      }
+    } else {
+      Layout::General
+    };
     Ok(self)
   }
 
@@ -254,7 +305,7 @@ macro_rules! impl_with_deref {
         other: NDArray<*mut T, N>,
       ) -> NDArrayResult<()>
       {
-        if other.shape != self.shape { return Err(NDArrayError::IncorrectShape); }
+        if other.shape != self.shape { return Err(NDArrayError::ShapesMismatch(Box::new(self.shape), Box::new(other.shape))); }
         other.into_f_iter().zip(self.into_f_iter()).for_each(|(lhs, rhs)| {
           *lhs.0 = *rhs.0;
         });
