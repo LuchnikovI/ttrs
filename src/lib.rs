@@ -4,6 +4,12 @@ mod utils;
 mod tt_vec;
 
 pub use tt_vec::TTVec;
+pub use ttcross:: {
+    CBf32,
+    CBf64,
+    CBc32,
+    CBc64,
+};
 pub use tt_traits::{
     TTf32,
     TTf64,
@@ -29,7 +35,7 @@ mod tests {
     macro_rules! test_random_cross {
         ($complex_type:ty, $acc:expr) => {
             let mode_dims = [2, 5, 3, 2, 45, 5, 2, 1, 4, 3, 2, 3, 27, 5, 6, 5, 1, 3, 2, 3, 4, 1, 2, 3, 4, 30, 4, 3, 2, 3, 4, 5, 4, 3];
-            let mut random_tt = TTVec::<$complex_type>::new_random_normal(&mode_dims, 25);
+            let mut random_tt = TTVec::<$complex_type>::new_random(mode_dims.to_vec(), 25);
             random_tt.set_into_left_canonical().unwrap();
             let mut cross_result = TTVec::<$complex_type>::ttcross(&mode_dims, 40, 0.01, |x| random_tt.eval_index(x).unwrap(), 4).unwrap();
             let log_norm_cross_result = cross_result.set_into_left_canonical().unwrap();

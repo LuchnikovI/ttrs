@@ -22,15 +22,29 @@ use linwrap::{
 };
 
 use crate::utils::get_trunc_dim;
-use crate::ttcross::CrossBuilder;
 
 // ---------------------------------------------------------------------------------- //
 
 #[derive(Debug)]
 pub enum TTError {
+
+  /// This error appears when error happens at the level of NDArray
   NDArrayError(NDArrayError),
+
+  /// This error appears when two Tensor Trains have different length
+  /// while it is required them to be equal.
+  LengthsMismatch,
+
+  /// This error appears when one sends an index of incorrect length to the
+  /// eval method.
   IncorrectIndexLength,
+
+  /// This error appears when one sends an index that lies out of bound
+  /// of a Tensor Train to the eval method.
   OutOfBound,
+
+  /// This error appears when local a mode dimensions of two Tensor Trains do
+  /// not match each other, while it is required them to be.
   IncorrectLocalDim,
 }
 
@@ -126,38 +140,58 @@ macro_rules! tt_impl {
       type Buff: AsMut<[$complex_type]> + AsRef<[$complex_type]>;
       type Kers: AsMut<[Self::Buff]> + AsRef<[Self::Buff]>;
 
-      fn new(
-        kernels:        Self::Kers,
-        internal_bonds: Vec<usize>,
-        mode_dims:      Vec<usize>,
+      /// This method generates a new Tensor Train with random kernels.
+      /// As an input it takes a vector with dimensions of each mode and
+      /// maximal TT rank.
+      fn new_random(
+        mode_dims: Vec<usize>,
+        max_rank:  usize,
       ) -> Self;
 
+      /// This method returns a slice with kernels.
       fn get_kernels(&self) -> &[Self::Buff];
 
+      /// This method returns a slice with left bond dimensions.
       fn get_left_bonds(&self) -> &[usize];
 
+      /// This method returns a slice with right bond dimensions.
       fn get_right_bonds(&self) -> &[usize];
 
+      /// This method returns a slice with modes dimensions.
       fn get_mode_dims(&self) -> &[usize];
       
+      /// This method returns number of modes.
       fn get_len(&self) -> usize;
 
+      /// This method returns an iterator over components of a Tensor Train.
       fn iter<'a>(&'a self) -> TTIter<'a, $complex_type>;
 
+      /// This method returns a mutable slice with kernels.
+      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// must be consistent with each other.
       unsafe fn get_kernels_mut(&mut self) -> &mut [Self::Buff];
 
+      /// This method returns a mutable slice with left bond dimensions.
+      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// must be consistent with each other.
       unsafe fn get_left_bonds_mut(&mut self) -> &mut [usize];
 
+      /// This method returns a mutable slice with right bond dimensions.
+      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// must be consistent with each other.
       unsafe fn get_right_bonds_mut(&mut self) -> &mut [usize];
 
+      /// This method returns a mutable iterator over components of a Tensor Train.
+      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// must be consistent with each other.
       unsafe fn iter_mut<'a>(&'a mut self) -> TTIterMut<'a, $complex_type>;
 
-      fn from_cross_builder(builder: CrossBuilder<$complex_type>) -> Self;
-
+      /// This method returns internal bond dimensions of a Tensor Train.
       fn get_bonds(&self) -> &[usize] {
         &self.get_left_bonds()[1..]
       }
 
+      /// This method conjugates elements of a tensor inplace.
       fn conj(&mut self) {
         for ker in unsafe { self.get_kernels_mut() } {
           let len = ker.as_ref().len();
@@ -166,8 +200,10 @@ macro_rules! tt_impl {
         }
       }
 
+      /// This method returns a dot product between two Tensor Trains.
+      /// It returns error when shapes of tensors do not match each other.
       fn dot(&self, other: &Self) -> TTResult<$complex_type> {
-        if self.get_len() != other.get_len() { return Err(TTError::IncorrectIndexLength); }
+        if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch); }
         let mut agr_buff = vec![$complex_one];
         let iter = self.iter().zip(other.iter());
         for (
@@ -192,6 +228,9 @@ macro_rules! tt_impl {
         Ok(agr_buff[0])
       }
 
+      /// This method sets a Tensor Train into the left canonical form inplace.
+      /// The L2 norm of a Tensor Train after this operation is equal to 1.
+      /// The log norm of the initial Tensor Train is returned.
       fn set_into_left_canonical(&mut self) -> TTResult<$real_type> {
         let mut new_left_bond = 1;
         let mut orth_buff = unsafe { $fn_uninit_buff(1) };
@@ -230,6 +269,9 @@ macro_rules! tt_impl {
         Ok(lognorm)
       }
 
+      /// This method sets a Tensor Train into the right canonical form inplace.
+      /// The L2 norm of a Tensor Train after this operation is equal to 1.
+      /// The log norm of the initial Tensor Train is returned.
       fn set_into_right_canonical(&mut self) -> TTResult<$real_type> {
         let mut new_right_bond = 1;
         let mut orth_buff = unsafe { $fn_uninit_buff(1) };
@@ -268,6 +310,7 @@ macro_rules! tt_impl {
         Ok(lognorm)
       }
 
+      /// This method evaluates an element of a Tensor Train given the index.
       fn eval_index(&self, index: &[usize]) -> TTResult<$complex_type> {
         let mut agr_buff = vec![$complex_one; 1];
         let mut agr = NDArray::from_slice(&agr_buff, [1, 1])?;
@@ -287,6 +330,9 @@ macro_rules! tt_impl {
         Ok(agr_buff[0])
       }
 
+      /// This method truncates a left canonical form of a Tensor Train inplace, given an accuracy
+      /// of a local truncation delta. The L2 norm of a Tensor Train after truncation is equal to 1.
+      /// Method returns the norm of a Tensor Train as if it was not normalized by 1.
       fn truncate_left_canonical(&mut self, delta: $real_type) -> TTResult<$real_type> {
         let mut lmbd_buff = vec![$complex_one; 1];
         let mut lmbd = NDArray::from_mut_slice(&mut lmbd_buff, [1, 1])?;
@@ -327,6 +373,9 @@ macro_rules! tt_impl {
         Ok((lmbd_buff[0].abs()))
       }
 
+      /// This method truncates a right canonical form of a Tensor Train inplace, given an accuracy
+      /// of a local truncation delta. The L2 norm of a Tensor Train after truncation is equal to 1.
+      /// Method returns the norm of a Tensor Train as if it was not normalized by 1.
       fn truncate_right_canonical(&mut self, delta: $real_type) -> TTResult<$real_type> {
         let mut lmbd_buff = vec![$complex_one; 1];
         let mut lmbd = NDArray::from_mut_slice(&mut lmbd_buff, [1, 1])?;
@@ -367,8 +416,9 @@ macro_rules! tt_impl {
         Ok((lmbd_buff[0].abs()))
       }
 
+      /// This method multiply a given Tensor Train by another one element-wisely. 
       fn elementwise_prod(&mut self, other: &Self) -> TTResult<()> {
-        if self.get_len() != other.get_len() { return Err(TTError::IncorrectIndexLength) }
+        if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch) }
         let iter = unsafe { self.iter_mut() }.zip(other.iter());
         for (
             (lhs_ker, lhs_right_bond, lhs_left_bond, lhs_mode_dim),
@@ -403,4 +453,3 @@ tt_impl!(TTf32, f32,       f32, random_normal_f32, uninit_buff_f32, uninit_buff_
 tt_impl!(TTf64, f64,       f64, random_normal_f64, uninit_buff_f64, uninit_buff_f64, 0.,                     1.,                     0., 1.);
 tt_impl!(TTc32, Complex32, f32, random_normal_c32, uninit_buff_c32, uninit_buff_f32, Complex32::new(0., 0.), Complex32::new(1., 0.), 0., 1.);
 tt_impl!(TTc64, Complex64, f64, random_normal_c64, uninit_buff_c64, uninit_buff_f64, Complex64::new(0., 0.), Complex64::new(1., 0.), 0., 1.);
-

@@ -18,7 +18,14 @@ use crate::tt_traits::{
     TTc64,
 };
 
-use crate::ttcross::CrossBuilder;
+use crate::ttcross::{
+  CBf32,
+  CBf64,
+  CBc32,
+  CBc64,
+};
+
+use crate::utils::build_bonds;
 
 #[derive(Debug, Clone)]
 pub struct TTVec<T>
@@ -30,31 +37,24 @@ pub struct TTVec<T>
 }
 
 macro_rules! impl_tt_trait {
-    ($complex_type:ty, $trait_type:ty) => {
+    ($complex_type:ty, $trait_type:ty, $fn_gen:ident) => {
         impl $trait_type for TTVec<$complex_type>
         {
             type Buff = Vec<$complex_type>;
             type Kers = Vec<Self::Buff>;
 
-            fn new(kernels: Vec<Vec<$complex_type>>, internal_bonds:Vec<usize>, mode_dims:Vec<usize>,) -> Self {
-                let mut right_bonds = internal_bonds.clone();
-                right_bonds.push(1);
-                let left_bonds = [vec![1], internal_bonds].concat();
-                debug_assert!(&left_bonds[1..] == &right_bonds[..(right_bonds.len() - 1)], "Left and right bonds incorrect intersection. Line: {}, File: {}", line!(), file!());
-                debug_assert!(left_bonds[0] == 1, "The most left bond is not equal to 1.");
-                debug_assert!(right_bonds[right_bonds.len() - 1] == 1, "The most right bond is not equal to 1. Line: {}, File: {}", line!(), file!());
-                Self { kernels, left_bonds, right_bonds, mode_dims }
+            fn new_random(
+              mode_dims: Vec<usize>,
+              max_rank:  usize,
+            ) -> Self {
+              let (left_bonds, right_bonds) = build_bonds(&mode_dims, max_rank);
+              let mut kernels: Vec<Vec<$complex_type>> = Vec::with_capacity(mode_dims.len());
+              for (left_bond, (dim, right_bond)) in left_bonds.iter().zip(mode_dims.iter().zip(right_bonds.iter())) {
+                kernels.push($fn_gen(*left_bond * *dim * *right_bond));
+              }
+              Self { kernels, left_bonds, right_bonds, mode_dims }
             }
-            fn from_cross_builder(builder: CrossBuilder<$complex_type>) -> Self {
-                let mut internal_bonds = builder.right_bonds;
-                internal_bonds.resize(builder.kernels.len()-1, 0);
-                debug_assert!(&internal_bonds[..] == &builder.left_bonds[1..], "Incorrect internal bond. Line: {}, File: {}", line!(), file!());
-                Self::new(
-                  builder.kernels,
-                  internal_bonds,
-                  builder.mode_dims,
-                )
-            }
+
             fn get_kernels(&self) ->  &[Vec<$complex_type>] {
                 &self.kernels
             }
@@ -99,31 +99,19 @@ macro_rules! impl_tt_trait {
     };
 }
 
-impl_tt_trait!(f32,       TTf32);
-impl_tt_trait!(f64,       TTf64);
-impl_tt_trait!(Complex32, TTc32);
-impl_tt_trait!(Complex64, TTc64);
+impl_tt_trait!(f32,       TTf32, random_normal_f32);
+impl_tt_trait!(f64,       TTf64, random_normal_f64);
+impl_tt_trait!(Complex32, TTc32, random_normal_c32);
+impl_tt_trait!(Complex64, TTc64, random_normal_c64);
 
 macro_rules! impl_random {
-    ($fn_gen:ident, $complex_type:ty, $real_type:ty) => {
+    ($fn_gen:ident, $complex_type:ty, $real_type:ty, $cross_type:ty) => {
         impl TTVec<$complex_type> {
-            pub fn new_random_normal(
-                mode_dims: &[usize],
-                max_rank: usize,
-              ) -> Self
-              {
-                let modes_num = mode_dims.len();
-                let mut kernels = Vec::with_capacity(modes_num);
-                kernels.push($fn_gen(mode_dims[0] * max_rank));
-                for dim in &mode_dims[1..(modes_num - 1)] {
-                  kernels.push($fn_gen(dim * max_rank * max_rank));
-                }
-                kernels.push($fn_gen(mode_dims[modes_num - 1] * max_rank));
-                let internal_bonds = vec![max_rank; modes_num - 1];
-                let mode_dims = mode_dims.to_owned();
-                Self::new(kernels, internal_bonds, mode_dims)
-              }
 
+            /// This method runs the TTCross algorithm reconstructing a Tensor Train representation
+            /// of a function f. As an input, it takes mode dimensions, maximal TT rank, parameter delta that determines
+            /// a Maxvol algorithm stopping criteria (this parameter should be small, e.g. 0.01),
+            /// function itself and number of DMRG sweeps that one needs to perform.
             pub fn ttcross(
                 mode_dims: &[usize],
                 max_rank: usize,
@@ -132,30 +120,36 @@ macro_rules! impl_random {
                 sweeps_num: usize,
             ) -> TTResult<Self> {
                 let kers_num = mode_dims.len();
-                let mut builder = CrossBuilder::<$complex_type>::new(max_rank, delta, mode_dims);
+                let mut builder = <$cross_type>::new(max_rank, delta, mode_dims);
                 for _ in 0..(kers_num * sweeps_num) {
                   builder.next(&f)?;
                 }
-                Ok(Self::from_cross_builder(builder)) 
+                Ok(builder.to_tt()) 
             }
         }
     };
 }
 
-impl_random!(random_normal_f32, f32      , f32);
-impl_random!(random_normal_f64, f64      , f64);
-impl_random!(random_normal_c32, Complex32, f32);
-impl_random!(random_normal_c64, Complex64, f64);
+impl_random!(random_normal_f32, f32      , f32, CBf32<TTVec<_>>);
+impl_random!(random_normal_f64, f64      , f64, CBf64<TTVec<_>>);
+impl_random!(random_normal_c32, Complex32, f32, CBc32<TTVec<_>>);
+impl_random!(random_normal_c64, Complex64, f64, CBc64<TTVec<_>>);
 
 // ----------------------------------------------------------------------------------- //
 
 #[cfg(test)]
 mod tests {
   use num_complex::ComplexFloat;
+  use crate::tt_traits::{
+    TTf32,
+    TTf64,
+    TTc32,
+    TTc64,
+  };
   use super::*;
   macro_rules! test_dot_and_canonical {
     ($complex_type:ident, $set_to_canonical_method:ident) => {
-      let mut tt = TTVec::<$complex_type>::new_random_normal(&[2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
+      let mut tt = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
       let tt_clone = tt.clone();
       let mut tt_conj = tt.clone();
       tt_conj.conj();
@@ -195,7 +189,7 @@ mod tests {
 
   macro_rules! test_truncation {
     ($complex_type:ident, $set_to_canonical_method:ident, $truncation_method:ident) => {
-      let mut tt = TTVec::<$complex_type>::new_random_normal(&[2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
+      let mut tt = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
       tt.$set_to_canonical_method().unwrap();
       let tt_clone = tt.clone();
       let mut tt_clone_conj = tt_clone.clone();
