@@ -457,7 +457,8 @@ macro_rules! tt_impl {
       }
 
       /// This method multiply a given Tensor Train by another one element-wisely. 
-      fn elementwise_prod(&mut self, other: &Self) -> TTResult<()> {
+      fn elementwise_prod(&mut self, other: &Self) -> TTResult<()> 
+      {
         if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch) }
         let iter = unsafe { self.iter_mut() }.zip(other.iter());
         for (
@@ -485,6 +486,90 @@ macro_rules! tt_impl {
         }
         Ok(())
       }
+
+      /// TODO: make it more stable?
+      /// This method multiplies a Tensor Train by a scalar inplace.
+      fn mul_by_scalar(&mut self, scalar: $complex_type)
+      {
+        unsafe { self.get_kernels_mut()[0].as_mut().iter_mut() }.for_each(|x| {
+          *x = *x * scalar;
+        });
+      }
+
+      /// This method add an other Tensor Train to a given one element-wisely. 
+      fn elementwise_sum(&mut self, other: &Self) -> TTResult<()>
+      {
+        if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch) }
+        let len = self.get_len();
+        let iter = unsafe { self.iter_mut() }.zip(other.iter()).enumerate();
+        for (
+          i, 
+          ( 
+            (lhs_ker, lhs_right_bond, lhs_left_bond, lhs_mode_dim),
+            (rhs_ker, rhs_right_bond, rhs_left_bond, rhs_mode_dim),
+          )
+        ) in iter {
+          if *lhs_mode_dim != rhs_mode_dim { return Err(TTError::IncorrectLocalDim) }
+          let mode_dim = rhs_mode_dim;
+          if i == 0 {
+            let lhs_ker_arr = NDArray::from_slice(lhs_ker, [*lhs_left_bond, mode_dim, *lhs_right_bond])?;
+            let rhs_ker_arr = NDArray::from_slice(rhs_ker, [rhs_left_bond, mode_dim, rhs_right_bond])?;
+            let new_right_bond = *lhs_right_bond + rhs_right_bond;
+            let new_size = *lhs_left_bond * new_right_bond * mode_dim;
+            let mut new_ker_buff = unsafe { $fn_uninit_buff(new_size) };
+            let new_ker = NDArray::from_mut_slice(&mut new_ker_buff, [*lhs_left_bond, mode_dim, new_right_bond])?;
+            let (k0, k1) = unsafe { new_ker.split_across_axis(2, *lhs_right_bond)? };
+            unsafe { k0.into_f_iter().zip(lhs_ker_arr.into_f_iter()).for_each(|(dst, src)| *dst.0 = *src.0) };
+            unsafe { k1.into_f_iter().zip(rhs_ker_arr.into_f_iter()).for_each(|(dst, src)| *dst.0 = *src.0) };
+            *lhs_ker = new_ker_buff;
+            *lhs_right_bond = new_right_bond;
+          } else if (i == len - 1) {
+            let lhs_ker_arr = NDArray::from_slice(lhs_ker, [*lhs_left_bond, mode_dim, *lhs_right_bond])?;
+            let rhs_ker_arr = NDArray::from_slice(rhs_ker, [rhs_left_bond, mode_dim, rhs_right_bond])?;
+            let new_left_bond = *lhs_left_bond + rhs_left_bond;
+            let new_size = new_left_bond * *lhs_right_bond * mode_dim;
+            let mut new_ker_buff = unsafe { $fn_uninit_buff(new_size) };
+            let new_ker = NDArray::from_mut_slice(&mut new_ker_buff, [new_left_bond, mode_dim, *lhs_right_bond])?;
+            let (k0, k1) = unsafe { new_ker.split_across_axis(0, *lhs_left_bond)? };
+            unsafe { k0.into_f_iter().zip(lhs_ker_arr.into_f_iter()).for_each(|(dst, src)| *dst.0 = *src.0) };
+            unsafe { k1.into_f_iter().zip(rhs_ker_arr.into_f_iter()).for_each(|(dst, src)| *dst.0 = *src.0) };
+            *lhs_ker = new_ker_buff;
+            *lhs_left_bond = new_left_bond;
+          } else {
+            let lhs_ker_arr = NDArray::from_slice(lhs_ker, [*lhs_left_bond, mode_dim, *lhs_right_bond])?;
+            let rhs_ker_arr = NDArray::from_slice(rhs_ker, [rhs_left_bond, mode_dim, rhs_right_bond])?;
+            let new_left_bond = *lhs_left_bond + rhs_left_bond;
+            let new_right_bond = *lhs_right_bond + rhs_right_bond;
+            let new_size = new_left_bond * new_right_bond * mode_dim;
+            let mut new_ker_buff = unsafe { $fn_uninit_buff(new_size) };
+            let new_ker = NDArray::from_mut_slice(&mut new_ker_buff, [new_left_bond, mode_dim, new_right_bond])?;
+            let (k0, k1) = unsafe { new_ker.split_across_axis(0, *lhs_left_bond)? };
+            let (k00, k01) = unsafe { k0.split_across_axis(2, *lhs_right_bond)? };
+            let (k10, k11) = unsafe { k1.split_across_axis(2, *lhs_right_bond)? };
+            unsafe { k00.into_f_iter().zip(lhs_ker_arr.into_f_iter()).for_each(|(dst, src)| *dst.0 = *src.0) };
+            unsafe { k11.into_f_iter().zip(rhs_ker_arr.into_f_iter()).for_each(|(dst, src)| *dst.0 = *src.0) };
+            unsafe { k10.into_f_iter().for_each(|dst| *dst.0 = $complex_zero ) };
+            unsafe { k01.into_f_iter().for_each(|dst| *dst.0 = $complex_zero ) };
+            *lhs_ker = new_ker_buff;
+            *lhs_left_bond = new_left_bond;
+            *lhs_right_bond = new_right_bond;
+          }
+        }
+        Ok(())
+      }
+
+      /*fn oprima_tt_max(&self) -> TTResult<Vec<usize>>
+      {
+        let mut right_plugs: Vec<Vec<$complex_type>> = Vec::with_capacity(self.get_len());
+        unsafe { right_plugs.set_len(self.get_len()) };
+        unsafe { *right_plugs.get_unchecked_mut(self.get_len() - 1) = vec![$complex_one] };
+        for (i, (ker, right_bond, left_bond, mode_dim)) in self.iter().rev().enumerate() {
+          let ker_arr = NDArray::from_slice(ker, [left_bond, mode_dim, right_bond])?;
+          let mut reduced_ker_buff = unsafe { $fn_uninit_buff(left_bond * right_bond) };
+          let reduced_ker_arr = NDArray::from_mut_slice(&mut reduced_ker_buff, [left_bond, 1, right_bond])?;
+        }
+        unimplemented!()
+      }*/
     }
   }
 }

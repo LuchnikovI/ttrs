@@ -105,7 +105,7 @@ impl_tt_trait!(Complex32, TTc32, random_normal_c32);
 impl_tt_trait!(Complex64, TTc64, random_normal_c64);
 
 macro_rules! impl_random {
-    ($fn_gen:ident, $complex_type:ty, $real_type:ty, $cross_type:ty) => {
+    ($fn_gen:ident, $complex_type:ty, $real_type:ty, $cross_type:ty, $complex_one:expr) => {
         impl TTVec<$complex_type> {
 
             /// This method runs the TTCross algorithm reconstructing a Tensor Train representation
@@ -126,20 +126,42 @@ macro_rules! impl_random {
                 }
                 Ok(builder.to_tt()) 
             }
+          
+            pub fn new_ones(
+              mode_dims: Vec<usize>,
+            ) -> Self
+            {
+              let len = mode_dims.len();
+              let left_bonds = vec![1; len];
+              let right_bonds = left_bonds.clone();
+              let mut kernels = Vec::with_capacity(len);
+              for dim in &mode_dims {
+                kernels.push(vec![$complex_one; *dim]);
+              }
+              Self {
+                kernels,
+                left_bonds,
+                right_bonds,
+                mode_dims,
+              }
+            }
         }
     };
 }
 
-impl_random!(random_normal_f32, f32      , f32, CBf32<TTVec<_>>);
-impl_random!(random_normal_f64, f64      , f64, CBf64<TTVec<_>>);
-impl_random!(random_normal_c32, Complex32, f32, CBc32<TTVec<_>>);
-impl_random!(random_normal_c64, Complex64, f64, CBc64<TTVec<_>>);
+impl_random!(random_normal_f32, f32      , f32, CBf32<TTVec<_>>, 1.                    );
+impl_random!(random_normal_f64, f64      , f64, CBf64<TTVec<_>>, 1.                    );
+impl_random!(random_normal_c32, Complex32, f32, CBc32<TTVec<_>>, Complex32::new(1., 0.));
+impl_random!(random_normal_c64, Complex64, f64, CBc64<TTVec<_>>, Complex64::new(1., 0.));
 
 // ----------------------------------------------------------------------------------- //
 
 #[cfg(test)]
 mod tests {
-  use num_complex::ComplexFloat;
+  use num_complex::{
+    ComplexFloat,
+    Complex,
+  };
   use crate::tt_traits::{
     TTf32,
     TTf64,
@@ -167,8 +189,6 @@ mod tests {
                  tt.log_dot(&tt_clone_conj).unwrap().exp() / log_norm.exp()-
                  tt_clone.log_dot(&tt_conj).unwrap().exp() / log_norm.exp();
       assert!(diff.abs() < 1e-5);
-      println!("{:?}", tt.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap());
-      println!("{:?}", tt_clone.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() + log_norm);
       assert!((
         tt.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() -
         tt_clone.log_eval_index(&[1, 2, 0, 4, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() + log_norm
@@ -236,5 +256,47 @@ mod tests {
     test_truncation!(f64,       set_into_right_canonical, truncate_right_canonical);
     test_truncation!(Complex32, set_into_right_canonical, truncate_right_canonical);
     test_truncation!(Complex64, set_into_right_canonical, truncate_right_canonical);
+  }
+
+  macro_rules! test_mul_by_scalar {
+    ($complex_type:ty, $scalar:expr) => {
+      let mut tt = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
+      let tt_clone = tt.clone();
+      tt.mul_by_scalar($scalar);
+      let val1 = tt.log_eval_index(&[1, 1, 0, 1, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap();
+      let val2 = tt_clone.log_eval_index(&[1, 1, 0, 1, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap() + $scalar.ln();
+      assert!((val1 - val2).abs() < 1e-4);
+    }
+  }
+
+  #[test]
+  fn test_mul_by_scalar() {
+    test_mul_by_scalar!(f32,       2.28                   );
+    test_mul_by_scalar!(f64,       2.28                   );
+    test_mul_by_scalar!(Complex32, Complex::new(4.2, 2.28));
+    test_mul_by_scalar!(Complex64, Complex::new(4.2, 2.28));
+  }
+
+  macro_rules! test_elementwise_sum {
+    ($complex_type:ty) => {
+      let mut tt1 = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 35);
+      tt1.set_into_left_canonical().unwrap();
+      let mut tt2 = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 25);
+      tt2.set_into_left_canonical().unwrap();
+      let val1 = tt1.log_eval_index(&[1, 1, 0, 1, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap().exp() +
+        tt2.log_eval_index(&[1, 1, 0, 1, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap().exp();
+      tt1.elementwise_sum(&tt2).unwrap();
+      let val2 = tt1.log_eval_index(&[1, 1, 0, 1, 2, 3, 3, 2, 0, 0, 1, 1]).unwrap().exp();
+      assert!((val1 - val2).abs() / (val1.abs() + val2.abs()) < 1e-5);
+    };
+  }
+
+  #[test]
+  fn test_elementwise_sum()
+  {
+    test_elementwise_sum!(f32      );
+    test_elementwise_sum!(f64      );
+    test_elementwise_sum!(Complex32);
+    test_elementwise_sum!(Complex64);
   }
 }

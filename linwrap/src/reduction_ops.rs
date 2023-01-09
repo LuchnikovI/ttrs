@@ -9,6 +9,17 @@ use crate::ndarray::NDArrayResult;
 // ---------------------------------------------------------------------- //
 // TODO: implement reductions for all meaningful operations
 
+#[inline]
+fn max_abs<T: ComplexFloat>(lhs: T, rhs: T) -> T {
+  let lhs = lhs.abs();
+  let rhs = rhs.abs();
+  if lhs > rhs {
+    T::from(lhs).unwrap()
+  } else {
+    T::from(rhs).unwrap()
+  }
+}
+
 macro_rules! reduction_ops_to_scalar {
   ($ptr_type:ident) => {
     impl<T, const N: usize> NDArray<*$ptr_type T, N>
@@ -79,16 +90,19 @@ macro_rules! reduction_ops_to_array {
   };
 }
 
-reduction_ops_to_array!(mut,   reduce_add,  |x: *mut T, y: *const T| { *x = *x + *y; });
-reduction_ops_to_array!(const, reduce_add,  |x: *mut T, y: *const T| { *x = *x + *y; });
-reduction_ops_to_array!(mut,   reduce_prod, |x: *mut T, y: *const T| { *x = *x * *y; });
-reduction_ops_to_array!(const, reduce_prod, |x: *mut T, y: *const T| { *x = *x * *y; });
+reduction_ops_to_array!(mut,   reduce_add,     |x: *mut T, y: *const T| *x = *x + *y        );
+reduction_ops_to_array!(const, reduce_add,     |x: *mut T, y: *const T| *x = *x + *y        );
+reduction_ops_to_array!(mut,   reduce_prod,    |x: *mut T, y: *const T| *x = *x * *y        );
+reduction_ops_to_array!(const, reduce_prod,    |x: *mut T, y: *const T| *x = *x * *y        );
+reduction_ops_to_array!(mut,   reduce_abs_max, |x: *mut T, y: *const T| *x = max_abs(*x, *y));
+reduction_ops_to_array!(const, reduce_abs_max, |x: *mut T, y: *const T| *x = max_abs(*x, *y));
 
 // ---------------------------------------------------------------------- //
 
 #[cfg(test)]
 mod tests {
   use crate::NDArray;
+  use crate::init_utils::random_normal_f64;
   use ndarray::Array4;
   use ndarray::Axis;
 
@@ -126,6 +140,23 @@ mod tests {
     let arr2 = Array4::from_shape_vec((2, 4, 8, 4), buff).unwrap();
     let arr2 = arr2.sum_axis(Axis(0)).sum_axis(Axis(1));
     unsafe { arr1.reduce_add(dst_arr).unwrap() };
+    let is_eq = arr2.iter().zip(unsafe { dst_arr.into_f_iter() }).all(|(lhs, rhs)| {
+      *lhs == unsafe { *rhs.0 }
+    });
+    assert!(is_eq);
+  }
+
+  #[test]
+  fn test_reduce_abs_max() {
+    let buff = random_normal_f64(256);
+    let mut dst_buff = vec![0.; 16];
+    let arr1 = NDArray::from_slice(&buff, [4, 8, 4, 2]).unwrap();
+    let dst_arr = NDArray::from_mut_slice(&mut dst_buff, [4, 1, 4, 1]).unwrap();
+    let arr2 = Array4::from_shape_vec((2, 4, 8, 4), buff).unwrap();
+    let arr2 = arr2
+      .map_axis(Axis(0), |x| (*x.iter().max_by(|l, r| l.abs().partial_cmp(&r.abs()).unwrap()).unwrap()).abs())
+      .map_axis(Axis(1), |x| (*x.iter().max_by(|l, r| l.abs().partial_cmp(&r.abs()).unwrap()).unwrap()).abs());
+    unsafe { arr1.reduce_abs_max(dst_arr).unwrap() };
     let is_eq = arr2.iter().zip(unsafe { dst_arr.into_f_iter() }).all(|(lhs, rhs)| {
       *lhs == unsafe { *rhs.0 }
     });

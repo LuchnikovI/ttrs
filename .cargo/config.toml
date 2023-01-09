@@ -1,3 +1,4 @@
 [alias]
 tr = "test --release"
 mdp = "run --release --example mdp"
+opt = "run --release --example 1d_optimization"
