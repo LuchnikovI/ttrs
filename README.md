@@ -1,18 +1,43 @@
 # TTRS - Tensor Train format for Rust
 This is an attempt to implement the [Tensor Train](https://sites.pitt.edu/~sjh95/related_papers/tensor_train_decomposition.pdf) (TT) format for processing of large low-rank tensors.
-Currently, this repo contains an implementation of the [TTCross](https://www.sciencedirect.com/science/article/pii/S0024379509003747) algorithm for efficient reconstruction of tensors from "black-box"
-functions, subroutines for setting a TT representation into the left-canonical form, svd-based truncation and dot product.
+Currently, this repo contains an implementation of the [TTCross](https://www.sciencedirect.com/science/article/pii/S0024379509003747) algorithm for efficient reconstruction of Tensor Train representations from "black-box"
+functions, subroutines for setting a TT representation into canonical forms, subroutines for truncation, dot product,
+arithmetic operations with Tensor Trains.
 
-The code is at the early stage of development and might contain severe bugs including safety issues.
+We also provide a python wrapper for this package that currently works with only double Complex dtype.
 
-# Example
-## Prerequisites
-The code relies on lapack and [blis](https://github.com/flame/blis) libraries. In particular, it uses src crates [blas-src](https://crates.io/crates/blas-src) with
+!!!The code is at the early stage of development and might contain severe bugs including safety issues.
+
+# Dependencies/Prerequisites
+The code relies on the lapack and [blis](https://github.com/flame/blis) libraries. In particular, it uses src crates [blas-src](https://crates.io/crates/blas-src) with
 blis feature and [lapack-src](https://crates.io/crates/lapack-src) with openblas feature. Blis is being downloaded and built at compile time automatically, while openblas
 and lapack must be presented on your computer.
-## How to run examples
-Currently, there is an example of TTCross based reconstruction of a Markov decision process (MDP) model that is discussed further here. To run this example
-execute the following command `cargo run --release --example mdp`.
+
+# How to instal a version for Python
+Clone this repo on your local machine. Create a python virtual environment via
+
+    python -m venv <name>
+
+or use an existing one. Activate the virtual environment. Install maturin in the virtual environment via 
+
+    pip install maturin 
+
+Go to the local directory with the cloned repo. Build the python package by running 
+
+    maturin develop --release
+
+in the cloned repo directory. Now you have ttrs package in your virtual environment.
+
+# Examples of Python code
+Currently, in the root directory of the package one can find the following ipynb's with examples:
+- optimization_example.ipynb: example of TT based global optimization of 1d function.
+
+# Examples of Rust code
+Currently, there are two examples written in Rust:
+    - example of TTCross based reconstruction of a Markov decision process (MDP) model that is discussed further here;
+    - example of TT based global optimization of 1d function
+    To run these examples execute the following command `cargo run --release --example mdp` for the first example and `cargo run --release --example opt` for the second one.
+
 ## MDP model reconstruction with TTCross
 Let as consider the following controll problem. On has a field where a robot can move in four directions: up, down, left and right. The field contains obstacles
 and a target, which is a desirable destination point of a robot. The problem has periodic boundary conditions, i.e. if a robot reaches the rightmost point, it appears
