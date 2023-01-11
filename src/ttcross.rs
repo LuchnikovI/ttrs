@@ -24,9 +24,13 @@ use crate::{TTf32, TTf64, TTc32, TTc64};
 use crate::utils::{
   build_random_indices,
   indices_prod,
+  get_indices_iter,
 };
 
-use crate::tt_traits::TTResult;
+use crate::tt_traits::{
+  TTResult,
+  TTError,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum DMRGState {
@@ -37,9 +41,9 @@ enum DMRGState {
 macro_rules! impl_cross_builder {
   ($cross_name:ident, $complex_type:ty, $real_type:ty, $tt_trait:ident, $fn_gen:ident) => {
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct $cross_name<T: $tt_trait> {
-      tt: T,
+      pub(super) tt: T,
       left_indices: Vec<Vec<Vec<usize>>>,
       right_indices: Vec<Vec<Vec<usize>>>,
       cur_ker: usize,
@@ -88,13 +92,11 @@ macro_rules! impl_next {
   ($cross_name:ident, $tt_trait:ident, $complex_type:ty, $fn_uninit_buff:ident, $fn_eye:ident) => {
     impl<T: $tt_trait> $cross_name<T> {
 
-      /// This method performs a step of cross approximation procedure. As an input it takes function
-      /// that one tries to represent in terms of a Tensor Train. It evaluates the function
-      /// number of times under the hood and update an estimation of a Tensor Train.
-      pub(super) fn next(
-        &mut self,
-        f: impl Fn(&[usize]) -> $complex_type + Sync,
-      ) -> TTResult<()>
+      /// This method returns either an iterator over indices that must be evaluated or None.
+      /// In case of None, nothing should be evaluated at the current step.
+      pub(super) fn get_args(
+        &self,
+      ) -> Option<impl IndexedParallelIterator<Item = Vec<usize>>>
       {
         let cur_ker = self.cur_ker;
         let dim = self.tt.get_mode_dims()[cur_ker];
@@ -104,24 +106,69 @@ macro_rules! impl_next {
           DMRGState::ToRight => {
             let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
             let left_indices = indices_prod(&self.left_indices[cur_ker], &local_indices);
-            let right_indices_ref = &self.right_indices[cur_ker];
+            let iter = get_indices_iter(
+              &self.right_indices[cur_ker],
+              &left_indices,
+              true,
+            );
             if cur_ker == (self.tt.get_len() - 1) {
-              unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().into_par_iter().zip(left_indices.into_par_iter()).for_each(|(dst, idx)| {
-                *dst = f(&idx[..]);
+              Some(iter)
+            } else {
+              if left_indices.len() == right_bond {
+                None
+              } else {
+                Some(iter)
+              }
+            }
+          },
+          DMRGState::ToLeft => {
+            let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
+            let right_indices = indices_prod(&local_indices, &self.right_indices[cur_ker]);
+            let iter = get_indices_iter(
+              &self.left_indices[cur_ker],
+              &right_indices,
+              false,
+            );
+            if cur_ker == 0 {
+              Some(iter)
+            } else {
+              if right_indices.len() == left_bond {
+                None
+              } else {
+                Some(iter)
+              }
+            }
+          },
+        }
+      }
+
+      /// This method perform an update step according to the obtained evaluated tensor elements.
+      pub(super) fn update(
+        &mut self,
+        measurements: Option<impl IndexedParallelIterator<Item = $complex_type>>
+      ) -> TTResult<()>
+      {
+        let cur_ker = self.cur_ker;
+        let dim = self.tt.get_mode_dims()[cur_ker];
+        let left_bond = self.tt.get_left_bonds()[cur_ker];
+        let right_bond = self.tt.get_right_bonds()[cur_ker];
+        match self.dmrg_state {
+          DMRGState::ToRight => {
+            if cur_ker == (self.tt.get_len() - 1) {
+              let iter = measurements.ok_or(TTError::EmptyUpdate)?;
+              unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().into_par_iter().zip(iter).for_each(|(dst, src)| {
+                *dst = src;
               }) };
               self.dmrg_state = DMRGState::ToLeft;
             } else {
-              if left_indices.len() == right_bond {
+              if left_bond * dim == right_bond {
+                let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
                 unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut $fn_eye(right_bond)[..]) };
                 self.left_indices[cur_ker + 1] = indices_prod(&self.left_indices[cur_ker], &local_indices);
                 self.cur_ker += 1;
               } else {
-                let mut m_buff: Vec<_> = (&left_indices).into_par_iter().flat_map(|lhs| {
-                  right_indices_ref.into_par_iter().map(|rhs| {
-                    let index: Vec<_> = lhs.into_iter().chain(rhs.into_iter()).map(|x| *x).collect();
-                    f(&index[..])
-                  })
-                }).collect();
+                let iter = measurements.ok_or(TTError::EmptyUpdate)?;
+                let mut m_buff: Vec<_> = iter.collect();
                 let m = NDArray::from_mut_slice(&mut m_buff, [right_bond, left_bond * dim])?;
                 let mut aux_buff = unsafe { $fn_uninit_buff(right_bond.pow(2)) };
                 let aux = NDArray::from_mut_slice(&mut aux_buff, [right_bond, right_bond])?;
@@ -133,36 +180,35 @@ macro_rules! impl_next {
                   reverse_order[*x] = i;
                 });
                 unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut m.transpose([1, 0])?.gen_f_array_from_axis_order(&reverse_order, 0).0) };
-                order.resize(right_indices_ref.len(), 0);
+                order.resize(right_bond, 0);
+                let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
+                let left_indices = indices_prod(&self.left_indices[cur_ker], &local_indices);
                 self.left_indices[cur_ker + 1] = order.into_iter().map(|i| left_indices[i].clone()).collect();
                 self.cur_ker += 1;
               }
             }
           },
           DMRGState::ToLeft => {
-            let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
-            let right_indices = indices_prod(&local_indices, &self.right_indices[cur_ker]);
-            let left_indices_ref = &self.left_indices[cur_ker];
             if cur_ker == 0 {
-              unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().into_par_iter().zip(right_indices.into_par_iter()).for_each(|(dst, idx)| {
-                *dst = f(&idx[..]);
+              let iter = measurements.ok_or(TTError::EmptyUpdate)?;
+              unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().into_par_iter().zip(iter).for_each(|(dst, src)| {
+                *dst = src;
               }) };
               self.dmrg_state = DMRGState::ToRight;
             } else {
-              if right_indices.len() == left_bond {
+              if right_bond * dim == left_bond {
+                let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
                 unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut $fn_eye(left_bond)[..]) };
                 self.right_indices[cur_ker - 1] = indices_prod(&local_indices, &self.right_indices[cur_ker]);
                 self.cur_ker -= 1;
               } else {
-                let mut m_buff: Vec<_> = (&right_indices).into_par_iter().flat_map(|rhs| {
-                  left_indices_ref.into_par_iter().map(|lhs| {
-                    let index: Vec<_> = lhs.into_iter().chain(rhs.into_iter()).map(|x| *x).collect();
-                    f(&index[..])
-                  })
-                }).collect();
+                let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
+                let right_indices = indices_prod(&local_indices, &self.right_indices[cur_ker]);
+                let iter = measurements.ok_or(TTError::EmptyUpdate)?;
+                let mut m_buff: Vec<_> = iter.collect();
                 let m = NDArray::from_mut_slice(&mut m_buff, [left_bond, right_bond * dim])?;
-                let mut aux_buff = unsafe { $fn_uninit_buff(left_indices_ref.len().pow(2)) };
-                let aux = NDArray::from_mut_slice(&mut aux_buff, [left_indices_ref.len(), left_indices_ref.len()])?;
+                let mut aux_buff = unsafe { $fn_uninit_buff(left_bond.pow(2)) };
+                let aux = NDArray::from_mut_slice(&mut aux_buff, [left_bond, left_bond])?;
                 unsafe { m.qr(aux)? };
                 let mut order = unsafe { m.maxvol(self.delta)? };
                 let mut reverse_order = Vec::with_capacity(order.len());
@@ -171,7 +217,7 @@ macro_rules! impl_next {
                   reverse_order[*x] = i;
                 });
                 unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut m.gen_f_array_from_axis_order(&reverse_order, 1).0) };
-                order.resize(left_indices_ref.len(), 0);
+                order.resize(left_bond, 0);
                 self.right_indices[cur_ker - 1] = order.into_iter().map(|i| right_indices[i].clone()).collect();
                 self.cur_ker -= 1;
               }
@@ -179,6 +225,18 @@ macro_rules! impl_next {
           },
         }
         Ok(())
+      }
+
+      /// This method performs a step of cross approximation procedure. As an input it takes function
+      /// that one tries to represent in terms of a Tensor Train. It evaluates the function
+      /// number of times under the hood and update an estimation of a Tensor Train.
+      pub(super) fn next(
+        &mut self,
+        f: impl Fn(&[usize]) -> $complex_type + Sync,
+      ) -> TTResult<()>
+      {
+        let measurements_iter = self.get_args().map(|it| it.map(|x| f(&x[..])));
+        self.update(measurements_iter)
       }
     }        
   };

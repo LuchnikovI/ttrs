@@ -2,6 +2,7 @@ mod tt_traits;
 mod ttcross;
 mod utils;
 mod tt_vec;
+mod pytt_vec;
 
 pub use tt_vec::TTVec;
 pub use ttcross:: {
@@ -16,6 +17,16 @@ pub use tt_traits::{
     TTc32,
     TTc64,
 };
+
+use pyo3::prelude::*;
+use pytt_vec::TTVc64;
+
+/// The module provides basic operations with the Tensor Train format.
+#[pymodule]
+fn ttrs(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+  m.add_class::<TTVc64>()?;
+  Ok(())
+}
 
 #[cfg(test)]
 mod tests {

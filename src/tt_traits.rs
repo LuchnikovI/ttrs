@@ -47,6 +47,10 @@ pub enum TTError {
   /// This error appears when local a mode dimensions of two Tensor Trains do
   /// not match each other, while it is required them to be.
   IncorrectLocalDim,
+
+  /// This error appears when one calls TTCross update with empty updates, while
+  /// some updates are required.
+  EmptyUpdate,
 }
 
 pub type TTResult<T> = Result<T, TTError>;

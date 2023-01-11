@@ -1,6 +1,8 @@
 use num_traits::Float;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
+use rayon::iter::ParallelIterator;
 //use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 pub(super) fn get_trunc_dim<T: Float>(lmbd: &[T], delta_local: T) -> usize
@@ -111,9 +113,47 @@ pub(super) fn build_random_indices(
   (all_left_indices, all_right_indices)
 }
 
+#[inline]
+pub(super) fn get_indices_iter(
+  first_indices: &[Vec<usize>],
+  last_indices: &[Vec<usize>],
+  is_reverse:bool,
+) -> impl IndexedParallelIterator<Item = Vec<usize>> 
+{
+  let first_indices = if first_indices.is_empty() { vec![vec![]] } else { first_indices.to_owned() };
+  let last_indices = if last_indices.is_empty() { vec![vec![]] } else { last_indices.to_owned() };
+  let first_size = first_indices.len();
+  let last_size = last_indices.len();
+  let size = first_size * last_size;
+  (0..size).into_par_iter()
+    .map(move |mut idx| {
+      let first_i = idx % first_size;
+      idx /= first_size;
+      let last_i = idx % last_size;
+      if !is_reverse {
+        unsafe {
+          first_indices.get_unchecked(first_i).into_iter().map(|x| *x)
+            .chain(
+              last_indices.get_unchecked(last_i).into_iter().map(|x| *x)
+            )
+            .collect()
+        }
+      } else {
+        unsafe {
+          last_indices.get_unchecked(last_i).into_iter().map(|x| *x)
+          .chain(
+            first_indices.get_unchecked(first_i).into_iter().map(|x| *x)
+          )
+          .collect()
+        }
+      }
+    })
+}
+
 #[cfg(test)]
 mod tests {
-  use super::{get_trunc_dim, build_bonds, indices_prod, build_random_indices};
+  use super::{get_trunc_dim, build_bonds, indices_prod, build_random_indices, get_indices_iter};
+  use rayon::iter::ParallelIterator;
   #[test]
   fn test_get_trunc_dim() {
     let lmbd = [10., 9., 8., 7., 6., 5., 4., 3., 2., 1.];
@@ -192,5 +232,58 @@ mod tests {
     test_build_random_indices_(&[5]);
     test_build_random_indices_(&[1, 1, 1, 1]);
     test_build_random_indices_(&[2, 3, 1, 2, 3, 5, 6, 3, 2, 1, 2, 3, 4, 6, 7]);
+  }
+
+  #[test]
+  fn test_get_indices_iter() {
+    let first = vec![
+      vec![0, 1, 2, 3],
+      vec![3, 2, 1, 0],
+      vec![1, 1, 1, 1],
+    ];
+    let last = vec![
+      vec![1, 1, 1],
+      vec![2, 2, 2],
+    ];
+    let true_indices = vec![
+      vec![0, 1, 2, 3, 1, 1, 1],
+      vec![3, 2, 1, 0, 1, 1, 1],
+      vec![1, 1, 1, 1, 1, 1, 1],
+      vec![0, 1, 2, 3, 2, 2, 2],
+      vec![3, 2, 1, 0, 2, 2, 2],
+      vec![1, 1, 1, 1, 2, 2, 2],
+    ];
+    let indices: Vec<_> = get_indices_iter(&first, &last, false).collect();
+    assert_eq!(&true_indices, &indices);
+    let true_indices = vec![
+      vec![1, 1, 1, 0, 1, 2, 3],
+      vec![1, 1, 1, 3, 2, 1, 0],
+      vec![1, 1, 1, 1, 1, 1, 1],
+      vec![2, 2, 2, 0, 1, 2, 3],
+      vec![2, 2, 2, 3, 2, 1, 0],
+      vec![2, 2, 2, 1, 1, 1, 1],
+    ];
+    let indices: Vec<_> = get_indices_iter(&first, &last, true).collect();
+    assert_eq!(&true_indices, &indices);
+    let first = vec![
+    ];
+    let last = vec![
+      vec![1, 1, 1, 5],
+      vec![2, 2, 2, 5],
+      vec![3, 2, 1, 4],
+    ];
+    let true_indices = last.clone();
+    let indices: Vec<_> = get_indices_iter(&first, &last, true).collect();
+    assert_eq!(&true_indices, &indices);
+    let last = vec![
+      ];
+      let first = vec![
+        vec![1, 1, 1, 5],
+        vec![2, 2, 2, 5],
+        vec![3, 2, 1, 4],
+      ];
+      let true_indices = first.clone();
+      let indices: Vec<_> = get_indices_iter(&first, &last, true).collect();
+      assert_eq!(&true_indices, &indices);
   }
 }
