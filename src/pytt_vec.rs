@@ -2,7 +2,7 @@ use pyo3::{
     prelude::*,
     exceptions::PyRuntimeError,
     };
-use numpy::{PyArray2, PyArray1, PyArray};
+use numpy::{PyArray3, PyArray2, PyArray1, PyArray};
 use num_complex::Complex64;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
@@ -209,6 +209,20 @@ impl TTVc64 {
     fn get_clone(&self) -> Self
     {
         self.clone()
+    }
+
+    /// This method returns kernels of a Tensor Train.
+    /// Returns:
+    ///     [List[np.ndarray<double>]]: list with kernels.
+    fn get_kernels<'py>(&self, py: Python<'py>) -> PyResult<Vec<&'py PyArray3<Complex64>>>
+    {
+        let mut output: Vec<&PyArray3<Complex64>> = Vec::with_capacity(self.0.tt.kernels.len());
+        for (ker, right_bond, left_bond, mode_dim) in self.0.tt.iter() {
+            let arr = PyArray1::from_slice(py, ker);
+            let arr = arr.reshape_with_order([left_bond, mode_dim, right_bond], numpy::npyffi::NPY_ORDER::NPY_FORTRANORDER)?;
+            output.push(arr)
+        }
+        Ok(output)
     }
 
     fn __repr__(&self) -> String {
