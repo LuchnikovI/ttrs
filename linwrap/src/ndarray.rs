@@ -415,16 +415,18 @@ macro_rules! impl_with_deref {
       /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
       /// as for raw pointers.
       pub unsafe fn gen_f_array_from_axis_order(
-        self, order: &[usize],
+        mut self,
+        order: &[usize],
         axis: usize,
       ) -> (Vec<T>, NDArray<*$ptr_type T, N>)
       {
+        self.shape[axis] = order.len();
         let ptr = ParPtrWrapper(self.ptr);
-        let size: usize = self.shape.into_iter().product();
+        let size = self.shape.into_iter().product::<usize>();
         let mut buff: Vec<T> = (0..size).into_iter().map(move |mut x| {
           let mut cur_ptr = ptr;
           for i in 0..N {
-            let dim = self.shape.get_unchecked(i);
+            let dim = *self.shape.get_unchecked(i);
             cur_ptr = if i != axis {
               cur_ptr.add(self.strides.get_unchecked(i) * (x % dim))
             } else {

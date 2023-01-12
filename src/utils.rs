@@ -1,4 +1,5 @@
 use num_traits::Float;
+use num_complex::ComplexFloat;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
@@ -150,9 +151,23 @@ pub(super) fn get_indices_iter(
     })
 }
 
+pub(super) fn argsort<T: ComplexFloat>(slice: &[T]) -> Vec<usize>
+where
+  T::Real: PartialOrd,
+{
+  let mut indices: Vec<_> = (0..(slice.len())).collect();
+  indices.sort_by(|i, j| unsafe { slice.get_unchecked(*j).abs().partial_cmp(&slice.get_unchecked(*i).abs()).unwrap() });
+  indices
+}
+
 #[cfg(test)]
 mod tests {
-  use super::{get_trunc_dim, build_bonds, indices_prod, build_random_indices, get_indices_iter};
+  use super::{get_trunc_dim, build_bonds, indices_prod, build_random_indices, get_indices_iter, argsort};
+  use linwrap::init_utils::random_normal_c64;
+  use num_complex::{
+    Complex64,
+    ComplexFloat,
+  };
   use rayon::iter::ParallelIterator;
   #[test]
   fn test_get_trunc_dim() {
@@ -285,5 +300,18 @@ mod tests {
       let true_indices = first.clone();
       let indices: Vec<_> = get_indices_iter(&first, &last, true).collect();
       assert_eq!(&true_indices, &indices);
+  }
+
+  #[test]
+  fn test_argsort() {
+    let values: Vec<Complex64> = random_normal_c64(100);
+    let args = argsort(&values);
+    let mut prev = f64::MAX;
+    assert!(args.into_iter().all(|i| {
+      let curr = values[i].abs();
+      let flag = prev > curr;
+      prev = curr;
+      flag
+    }))
   }
 }

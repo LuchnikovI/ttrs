@@ -18,7 +18,7 @@ use crate::tt_traits::{
     TTc64,
 };
 
-use crate::ttcross::{
+use crate::tt_cross::{
   CBf32,
   CBf64,
   CBc32,
@@ -169,6 +169,7 @@ mod tests {
     TTc64,
   };
   use super::*;
+
   macro_rules! test_dot_and_canonical {
     ($complex_type:ident, $set_to_canonical_method:ident) => {
       let mut tt = TTVec::<$complex_type>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3], 64);
@@ -298,5 +299,32 @@ mod tests {
     test_elementwise_sum!(f64      );
     test_elementwise_sum!(Complex32);
     test_elementwise_sum!(Complex64);
+  }
+
+  #[inline]
+  fn idx_to_arg(x: &[usize]) -> f64 {
+      x.into_iter().enumerate().map(|(i, x)| {
+          2. * (*x as f64) / 2f64.powi(i as i32)
+      }).sum()
+  }
+  #[inline]
+  fn target_function(x: &[usize]) -> f64 {
+      let arg = idx_to_arg(x);
+      ((arg - 2.512345678).powi(2) + 1e-3).ln() * (15. * (arg - 2.512345678)).cos()
+  }
+
+  macro_rules! test_optima_tt_max {
+    ($complex_type:ty, $real_type:ty) => {
+      let modes = vec![2; 20];
+      let tt = TTVec::<$complex_type>::ttcross(&modes, 20, 0.01, |x| <$complex_type>::from(target_function(x)), 4).unwrap();
+      let argmax = tt.optima_tt_max(1e-8, 10).unwrap();
+      assert!((idx_to_arg(&argmax) - 2.512345678).abs() < 1e-5)
+    };
+  }
+
+  #[test]
+  fn test_optima_tt_max() {
+    test_optima_tt_max!(f64,       f64);
+    test_optima_tt_max!(Complex64, f64);
   }
 }

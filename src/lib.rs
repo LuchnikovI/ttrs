@@ -1,11 +1,11 @@
 mod tt_traits;
-mod ttcross;
+mod tt_cross;
 mod utils;
 mod tt_vec;
 mod pytt_vec;
 
 pub use tt_vec::TTVec;
-pub use ttcross:: {
+pub use tt_cross:: {
     CBf32,
     CBf64,
     CBc32,

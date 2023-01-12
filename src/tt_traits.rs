@@ -22,7 +22,11 @@ use linwrap::{
   },
 };
 
-use crate::utils::get_trunc_dim;
+use crate::utils::{
+  get_trunc_dim,
+  argsort,
+  indices_prod,
+};
 
 // ---------------------------------------------------------------------------------- //
 
@@ -140,7 +144,7 @@ macro_rules! tt_impl {
     $real_zero:expr,
     $real_one:expr
   ) => {
-    pub trait $trait_name
+    pub trait $trait_name: Clone
     {
       type Buff: AsMut<[$complex_type]> + AsRef<[$complex_type]>;
       type Kers: AsMut<[Self::Buff]> + AsRef<[Self::Buff]>;
@@ -500,6 +504,11 @@ macro_rules! tt_impl {
         });
       }
 
+      /// This method returns maximal bond dimension.
+      fn get_tt_rank(&self) -> usize {
+        *self.get_bonds().into_iter().max().unwrap()
+      }
+
       /// This method add an other Tensor Train to a given one element-wisely. 
       fn elementwise_sum(&mut self, other: &Self) -> TTResult<()>
       {
@@ -562,18 +571,95 @@ macro_rules! tt_impl {
         Ok(())
       }
 
-      /*fn oprima_tt_max(&self) -> TTResult<Vec<usize>>
+      /// This method is the implementation of the optimization method described in
+      /// https://arxiv.org/abs/2209.14808. It finds the index that corresponds to the
+      /// quasi maximum modulo element (the method is approximate). 
+      fn optima_tt_max(
+        &self,
+        delta: $real_type,
+        k: usize,
+      ) -> TTResult<Vec<usize>>
       {
-        let mut right_plugs: Vec<Vec<$complex_type>> = Vec::with_capacity(self.get_len());
-        unsafe { right_plugs.set_len(self.get_len()) };
-        unsafe { *right_plugs.get_unchecked_mut(self.get_len() - 1) = vec![$complex_one] };
-        for (i, (ker, right_bond, left_bond, mode_dim)) in self.iter().rev().enumerate() {
-          let ker_arr = NDArray::from_slice(ker, [left_bond, mode_dim, right_bond])?;
-          let mut reduced_ker_buff = unsafe { $fn_uninit_buff(left_bond * right_bond) };
-          let reduced_ker_arr = NDArray::from_mut_slice(&mut reduced_ker_buff, [left_bond, 1, right_bond])?;
+        let len =  self.get_len();
+        let mut prob = self.clone();
+        prob.conj();
+        prob.elementwise_prod(self)?;
+        prob.set_into_left_canonical()?;
+        prob.truncate_left_canonical(delta)?;
+        let mut plug_buff = vec![$complex_one];
+        let mut right_parts: Vec<Vec<$complex_type>> = vec![Vec::new(); len];
+        for (i, (ker, right_bond, left_bond, mode_dim)) in prob.iter().rev().enumerate() {
+          let plug_arr = NDArray::from_mut_slice(&mut plug_buff, [right_bond, 1])?;
+          let ker_arr = NDArray::from_slice(ker, [left_bond * mode_dim, right_bond])?;
+          let mut new_right_part_buff = unsafe { $fn_uninit_buff(left_bond * mode_dim) };
+          let new_right_part_arr = NDArray::from_mut_slice(&mut new_right_part_buff, [left_bond * mode_dim, 1])?;
+          unsafe { new_right_part_arr.matmul_inplace(ker_arr, plug_arr) }?;
+          let mut new_plug_buff = vec![$complex_zero; left_bond];
+          let new_plug_arr = NDArray::from_mut_slice(&mut new_plug_buff, [left_bond, 1])?;
+          let new_right_part_arr = NDArray::from_mut_slice(&mut new_right_part_buff, [left_bond, mode_dim])?;
+          unsafe { new_right_part_arr.reduce_add(new_plug_arr)? };
+          let norm_sq = unsafe { new_plug_arr.norm_n_pow_n(2) };
+          unsafe { new_plug_arr.mul_by_scalar($complex_one / norm_sq.sqrt()) };
+          right_parts[len - 1 - i] = new_right_part_buff;
+          plug_buff = new_plug_buff;
         }
-        unimplemented!()
-      }*/
+        let mut values_buff = Vec::new();
+        let mut args: Vec<Vec<usize>> = vec![];
+        let mut plug_buff = vec![$complex_one];
+        let mut samples_num = 1;
+        for (right_part, (ker, right_bond, left_bond, mode_dim)) in right_parts.into_iter().zip(prob.iter()) {
+          let right_part_arr = NDArray::from_slice(&right_part, [left_bond, mode_dim])?;
+          let plug_arr = NDArray::from_slice(&plug_buff, [samples_num, left_bond])?;
+          values_buff = unsafe { $fn_uninit_buff(samples_num * mode_dim) };
+          let values_arr = NDArray::from_mut_slice(&mut values_buff, [samples_num, mode_dim])?;
+          unsafe { values_arr.matmul_inplace(plug_arr, right_part_arr)? };
+          let local_args: Vec<Vec<usize>> = (0..mode_dim).map(|x| vec![x]).collect();
+          args = indices_prod(&args, &local_args);
+          let indices = argsort(&values_buff);
+          let mut plugker_buff = unsafe { $fn_uninit_buff(samples_num * mode_dim * right_bond) };
+          let plugker_arr = NDArray::from_mut_slice(&mut plugker_buff, [samples_num, mode_dim * right_bond])?;
+          let ker_arr = NDArray::from_slice(&ker, [left_bond, mode_dim * right_bond])?;
+          unsafe { plugker_arr.matmul_inplace(plug_arr, ker_arr)? };
+          let plugker_arr = NDArray::from_mut_slice(&mut plugker_buff, [samples_num * mode_dim, right_bond])?;
+          samples_num = std::cmp::min(k, indices.len());
+          (plug_buff, _) = unsafe { plugker_arr.gen_f_array_from_axis_order(&indices[..samples_num], 0) };
+          let new_args: Vec<Vec<usize>> = indices.iter().take(k).map(|i| unsafe { args.get_unchecked(*i).clone() }).collect();
+          args = new_args;
+          let new_values = indices.iter().take(k).map(|i| unsafe { *values_buff.get_unchecked(*i) }).collect();
+          values_buff = new_values;
+        }
+        let (argmax, _) = values_buff.into_iter().enumerate().max_by(|(_, x), (_, y)| x.abs().partial_cmp(&y.abs()).unwrap()).unwrap();
+        Ok(args[argmax].clone())
+      }
+
+      /// This method is the combination of the optimization methods
+      /// (1) https://arxiv.org/abs/2101.03377 and (2) https://arxiv.org/abs/2209.14808
+      /// The method (1) is essentially a power iteration method. It is being run first.
+      /// It takes at most power_iterations_max_num or being terminated earlier if the
+      /// max_rank of the power of a tensor train is achieved. Then one runs (2) method
+      /// on the resulting power of a tensor train, k is the hyper parameter (for more
+      /// details see (1)), typically is set to be equal ~ 10.
+      fn argmax_modulo(
+        &self,
+        delta: $real_type,
+        power_iterations_max_num: usize,
+        max_rank: usize,
+        k: usize,
+      ) -> TTResult<Vec<usize>>
+      {
+        let mut tt = self.clone();
+        tt.set_into_left_canonical()?;
+        tt.truncate_left_canonical(delta)?;
+        for _ in 0..power_iterations_max_num {
+          if tt.get_tt_rank() > max_rank {
+            break;
+          }
+          tt.elementwise_prod(self)?;
+          tt.set_into_left_canonical()?;
+          tt.truncate_left_canonical(delta)?;
+        }
+        tt.optima_tt_max(delta, k)
+      }
     }
   }
 }
