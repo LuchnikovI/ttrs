@@ -638,7 +638,7 @@ macro_rules! tt_impl {
       /// It takes at most power_iterations_max_num or being terminated earlier if the
       /// max_rank of the power of a tensor train is achieved. Then one runs (2) method
       /// on the resulting power of a tensor train, k is the hyper parameter (for more
-      /// details see (1)), typically is set to be equal ~ 10.
+      /// details see (2)), typically it is set to be equal ~ 10.
       fn argmax_modulo(
         &self,
         delta: $real_type,

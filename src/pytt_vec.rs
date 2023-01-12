@@ -225,6 +225,32 @@ impl TTVc64 {
         Ok(output)
     }
 
+    /// This method is the combination of the optimization methods
+    /// (1) https://arxiv.org/abs/2101.03377 and (2) https://arxiv.org/abs/2209.14808
+    /// The method (1) is essentially a power iteration method. It is being run first.
+    /// It takes at most power_iterations_max_num or being terminated earlier if the
+    /// max_rank of the power of a tensor train is achieved. Then one runs (2) method
+    /// on the resulting power of a tensor train, k is the hyper parameter (for more
+    /// details see (2)), typically it is set to be equal ~ 10.
+    /// Args:
+    ///     delta (double): truncation accuracy;
+    ///     power_iterations_max_num (int): maximum number of power iterations;
+    ///     max_rank: the maximal acceptable rank during the power iteration;
+    ///     k: hyperparameter (see (2) for more details);
+    /// Returns:
+    ///     [List[int]]: modulo argmax.
+    fn argmax_modulo(
+        &self,
+        delta: f64,
+        power_iterations_max_num: usize,
+        max_rank: usize,
+        k: usize,
+    ) -> PyResult<Vec<usize>>
+    {
+        let val = self.0.tt.argmax_modulo(delta, power_iterations_max_num, max_rank, k)?;
+        Ok(val)
+    }
+
     fn __repr__(&self) -> String {
         format!("{{ Bond dims: {:?}, Modes: {:?} }}", self.get_bonds(), self.0.tt.mode_dims)
     }
