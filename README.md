@@ -13,7 +13,7 @@ The code relies on the lapack and [blis](https://github.com/flame/blis) librarie
 blis feature and [lapack-src](https://crates.io/crates/lapack-src) with openblas feature. Blis is being downloaded and built at compile time automatically, while openblas
 and lapack must be presented on your computer.
 
-# How to instal a version for Python
+# How to install a version for Python
 Clone this repo on your local machine. Create a python virtual environment via
 
     python -m venv <name>
@@ -30,12 +30,12 @@ in the cloned repo directory. Now you have ttrs package in your virtual environm
 
 # Examples of Python code
 Currently, in the root directory of the package one can find the following ipynb's with examples:
-- optimization_example.ipynb: example of TT based global optimization of 1d function.
+- optimization_example.ipynb: an example of TT based global optimization of a 1d function.
 
 # Examples of Rust code
 Currently, there are two examples written in Rust:
     - example of TTCross based reconstruction of a Markov decision process (MDP) model that is discussed further here;
-    - example of TT based global optimization of 1d function
+    - example of TT based global optimization of a 1d function
     To run these examples execute the following command `cargo run --release --example mdp` for the first example and `cargo run --release --example opt` for the second one.
 
 ## MDP model reconstruction with TTCross
