@@ -56,3 +56,28 @@ extern "C" {
   ger!(cgeru_, Complex32);
   ger!(zgeru_, Complex64);
 }
+
+macro_rules! trsm {
+  ($fn_name:ident, $type_name:ident) => {
+    pub(super) fn $fn_name(
+      side:   *const c_char,
+      uplo:   *const c_char,
+      transa: *const c_char,
+      diag:   *const c_char,
+      m:      *const c_int,
+      n:      *const c_int,
+      alpha:  *const $type_name,
+      a:      *mut   $type_name,
+      lda:    *const c_int,
+      b:      *mut   $type_name,
+      ldb:    *const c_int,
+    );
+  };
+}
+
+extern "C" {
+  trsm!(strsm_, f32      );
+  trsm!(dtrsm_, f64      );
+  trsm!(ctrsm_, Complex32);
+  trsm!(ztrsm_, Complex64);
+}

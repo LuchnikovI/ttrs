@@ -83,6 +83,12 @@ pub enum NDArrayError {
   /// This error appears when the lapack routine for QR decomposition postprocessing ?orgqr fails. 
   ErrorORGQR(c_int),
 
+  /// This error appears when ?getrf lapack subroutine fails.
+  ErrorGETRF(c_int),
+
+  /// This error appears when ?getrs lapack subroutine fails.
+  ErrorGETRS(c_int),
+
   /// This error appears when the Fortran layout is required and 
   /// an array has a layout different to the Fortran layout
   FortranLayoutRequired,
@@ -105,14 +111,16 @@ impl Debug for NDArrayError {
         NDArrayError::IncorrectShape(shape_given, shape_required) => { f.write_str(&format!("Given shape {:?} does not match the required one {:?}.", &shape_given[..], &shape_required[..])) },
         NDArrayError::SquareMatrixRequired(m, n) => { f.write_str(&format!("Square matrix is required, given matrix of shape {:?}.", [m, n])) },
         NDArrayError::MatmulDimMismatch(m, n) => { f.write_str(&format!("Impossible to perform matrix multiplication along indices of different dimensions. Given dimensions {}, {}.", m, n)) },
-        NDArrayError::MaxvolInputSizeMismatch(m, n) => { f.write_str(&format!("Number of columns of a Maxvol algorithm input must be >= than number of rows. Given number of columns {}, number of rows {}.", n, m))},
+        NDArrayError::MaxvolInputSizeMismatch(m, n) => { f.write_str(&format!("Number of rows of a Maxvol algorithm input must be >= than number of columns. Given number of columns {}, number of rows {}.", n, m))},
         NDArrayError::BroadcastingError(shape1, shape2) => { f.write_str(&format!("Impossible to broadcast arrays of shapes {:?} and {:?}.", &shape1[..], &shape2[..]))},
         NDArrayError::NotContiguous => { f.write_str("Array is not contiguous in memory.")},
         NDArrayError::IncorrectIndicesOrder(order) => { f.write_str(&format!("Incorrect transposition specification {:?}.", order)) },
         NDArrayError::ErrorGESV(code) => { f.write_str(&format!("Lapack linear systems solver (?GESV) failed with code {}.", code)) },
         NDArrayError::ErrorGESVD(code) => { f.write_str(&format!("Lapack SVD routine (?GESVD) failed with code {}.", code)) },
         NDArrayError::ErrorGEQRF(code) => { f.write_str(&format!("Lapack QR decomposition routine (?GEQRF) failed with code {}.", code)) },
-        NDArrayError::ErrorORGQR(code) => { f.write_str(&format!("Lapac routine for QR decomposition result postprocessing (?ORGQR) failed with code {}", code)) },
+        NDArrayError::ErrorORGQR(code) => { f.write_str(&format!("Lapack routine for QR decomposition result postprocessing (?ORGQR) failed with code {}", code)) },
+        NDArrayError::ErrorGETRF(code) => { f.write_str(&format!("Lapack routine ?GETRF failed with code {}", code)) },
+        NDArrayError::ErrorGETRS(code) => { f.write_str(&format!("Lapack routine ?GETRS failed with code {}", code)) },
         NDArrayError::FortranLayoutRequired => { f.write_str("Array has non-Fortran layout.")},
         NDArrayError::MutableElementsOverlapping => { f.write_str("Strides and a shape allows mutable elements overlapping.") },
         NDArrayError::IncorrectRange => { f.write_str("Invalid range for sub-array specification.")},

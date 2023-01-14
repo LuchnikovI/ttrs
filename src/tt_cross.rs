@@ -107,9 +107,9 @@ macro_rules! impl_next {
             let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
             let left_indices = indices_prod(&self.left_indices[cur_ker], &local_indices);
             let iter = get_indices_iter(
-              &self.right_indices[cur_ker],
               &left_indices,
-              true,
+              &self.right_indices[cur_ker],
+              false,
             );
             if cur_ker == (self.tt.get_len() - 1) {
               Some(iter)
@@ -125,9 +125,9 @@ macro_rules! impl_next {
             let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
             let right_indices = indices_prod(&local_indices, &self.right_indices[cur_ker]);
             let iter = get_indices_iter(
-              &self.left_indices[cur_ker],
               &right_indices,
-              false,
+              &self.left_indices[cur_ker],
+              true,
             );
             if cur_ker == 0 {
               Some(iter)
@@ -169,17 +169,18 @@ macro_rules! impl_next {
               } else {
                 let iter = measurements.ok_or(TTError::EmptyUpdate)?;
                 let mut m_buff: Vec<_> = iter.collect();
-                let m = NDArray::from_mut_slice(&mut m_buff, [right_bond, left_bond * dim])?;
+                let m = NDArray::from_mut_slice(&mut m_buff, [left_bond * dim, right_bond])?;
                 let mut aux_buff = unsafe { $fn_uninit_buff(right_bond.pow(2)) };
                 let aux = NDArray::from_mut_slice(&mut aux_buff, [right_bond, right_bond])?;
-                unsafe { m.rq(aux)? };
+                unsafe { m.qr(aux)? };
                 let mut order = unsafe { m.maxvol(self.delta)? };
                 let mut reverse_order = Vec::with_capacity(order.len());
                 unsafe { reverse_order.set_len(order.len()) };
                 order.iter().enumerate().for_each(|(i, x)| {
                   reverse_order[*x] = i;
                 });
-                unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut m.transpose([1, 0])?.gen_f_array_from_axis_order(&reverse_order, 0).0) };
+                let mut new_ker = unsafe { m.gen_f_array_from_axis_order(&reverse_order, 0).0 };
+                unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut new_ker) };
                 order.resize(right_bond, 0);
                 let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
                 let left_indices = indices_prod(&self.left_indices[cur_ker], &local_indices);
@@ -206,7 +207,7 @@ macro_rules! impl_next {
                 let right_indices = indices_prod(&local_indices, &self.right_indices[cur_ker]);
                 let iter = measurements.ok_or(TTError::EmptyUpdate)?;
                 let mut m_buff: Vec<_> = iter.collect();
-                let m = NDArray::from_mut_slice(&mut m_buff, [left_bond, right_bond * dim])?;
+                let m = NDArray::from_mut_slice(&mut m_buff, [right_bond * dim, left_bond])?;
                 let mut aux_buff = unsafe { $fn_uninit_buff(left_bond.pow(2)) };
                 let aux = NDArray::from_mut_slice(&mut aux_buff, [left_bond, left_bond])?;
                 unsafe { m.qr(aux)? };
@@ -216,7 +217,8 @@ macro_rules! impl_next {
                 order.iter().enumerate().for_each(|(i, x)| {
                   reverse_order[*x] = i;
                 });
-                unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut m.gen_f_array_from_axis_order(&reverse_order, 1).0) };
+                let mut new_ker = unsafe { m.transpose([1, 0])?.gen_f_array_from_axis_order(&reverse_order, 1).0 };
+                unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut new_ker) };
                 order.resize(left_bond, 0);
                 self.right_indices[cur_ker - 1] = order.into_iter().map(|i| right_indices[i].clone()).collect();
                 self.cur_ker -= 1;
@@ -296,7 +298,7 @@ mod tests {
       let log_norm = tt.set_into_left_canonical().unwrap();
       let tt_based = (2. * log_norm - 19. * (2 as $real_type).ln()).exp();
       let exact = 2. * (1 as $real_type).sin();
-      assert!((tt_based - exact).abs() < $acc);
+      assert!((tt_based - exact).abs() < $acc, "tt_based: {}, exact: {}", tt_based, exact);
       tt.truncate_left_canonical(1e-6).unwrap();
       let mut tt_conj = tt.clone();
       tt_conj.conj();

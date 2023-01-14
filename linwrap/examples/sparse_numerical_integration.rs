@@ -87,7 +87,9 @@ fn main() {
             let mut cols_buff = get_cols(&cols_order);
             counter += YGRIDSIZE * RANK;
             let cols = NDArray::from_mut_slice(&mut cols_buff, [RANK, YGRIDSIZE]).unwrap();
-            let mut new_rows_order = cols.maxvol(0.).unwrap();
+            let (mut cols_tr_buff, _) = cols.transpose([1, 0]).unwrap().gen_f_array();
+            let cols_tr = NDArray::from_mut_slice(&mut cols_tr_buff, [YGRIDSIZE, RANK]).unwrap();
+            let mut new_rows_order = cols_tr.maxvol(0.).unwrap();
             new_rows_order.resize(RANK, 0);
             if new_rows_order == rows_order {
                 break;
@@ -97,7 +99,9 @@ fn main() {
             let mut rows_buff = get_rows(&rows_order);
             counter += XGRIDSIZE * RANK;
             let rows = NDArray::from_mut_slice(&mut rows_buff, [RANK, XGRIDSIZE]).unwrap();
-            let mut new_cols_order = rows.maxvol(0.).unwrap();
+            let (mut rows_tr_buff, _) = rows.transpose([1, 0]).unwrap().gen_f_array();
+            let rows_tr = NDArray::from_mut_slice(&mut rows_tr_buff, [XGRIDSIZE, RANK]).unwrap();
+            let mut new_cols_order = rows_tr.maxvol(0.).unwrap();
             new_cols_order.resize(RANK, 0);
             if new_cols_order == cols_order {
                 break;

@@ -32,10 +32,12 @@ use num_complex::ComplexFloat;
 
 use crate::blas_bind::{sgemm_, dgemm_, cgemm_, zgemm_};
 use crate::blas_bind::{sger_, dger_, cgeru_, zgeru_};
+use crate::blas_bind::{strsm_, dtrsm_, ctrsm_, ztrsm_};
 use crate::lapack_bind::{sgesv_, dgesv_, cgesv_, zgesv_};
 use crate::lapack_bind::{sgesvd_, dgesvd_, cgesvd_, zgesvd_};
 use crate::lapack_bind::{sgeqrf_, dgeqrf_, cgeqrf_, zgeqrf_};
 use crate::lapack_bind::{sorgqr_, dorgqr_, cungqr_, zungqr_};
+use crate::lapack_bind::{sgetrf_, dgetrf_, cgetrf_, zgetrf_};
 
 macro_rules! impl_matmul {
   ($fn_name:ident, $type_name:ident, $alpha:expr, $beta:expr) => {
@@ -441,13 +443,46 @@ impl_rank1_update!(dger_,  f64      );
 impl_rank1_update!(cgeru_, Complex32);
 impl_rank1_update!(zgeru_, Complex64);
 
+macro_rules! impl_maxvol_preprocess {
+  ($getrf:ident, $trsm:ident, $complex_type_name:ty, $complex_one:expr) => {
+    impl NDArray<*mut $complex_type_name, 2> {
+      unsafe fn maxvol_preprocess(self) -> NDArrayResult<Vec<usize>> {
+        let mut ipiv = Vec::with_capacity(self.shape[1]);
+        ipiv.set_len(self.shape[1]);
+        let m = self.shape[0] as c_int;
+        let n = self.shape[1] as c_int;
+        let lda = self.strides[1] as c_int;
+        let mut info: c_int = 0;
+        $getrf(&m, &n, self.ptr, &lda, ipiv.as_mut_ptr(), &mut info);
+        let (a, b) = self.split_across_axis(0, self.shape[1])?;
+        let side = 'R' as c_char;
+        let uplo = 'L' as c_char;
+        let transa = 'N' as c_char;
+        let diag = 'U' as c_char;
+        let m = b.shape[0] as c_int;
+        let n = b.shape[1] as c_int;
+        let alpha = $complex_one;
+        let lda = a.strides[1] as c_int;
+        let ldb = b.strides[1] as c_int;
+        $trsm(&side, &uplo, &transa, &diag, &m, &n, &alpha, a.ptr, &lda, b.ptr, &ldb);
+        Ok(ipiv.into_iter().map(|x| x as usize).collect())
+      }
+    }
+  };
+}
+
+impl_maxvol_preprocess!(sgetrf_, strsm_, f32      , 1f32                  );
+impl_maxvol_preprocess!(dgetrf_, dtrsm_, f64      , 1f64                  );
+impl_maxvol_preprocess!(cgetrf_, ctrsm_, Complex32, Complex32::new(1., 0.));
+impl_maxvol_preprocess!(zgetrf_, ztrsm_, Complex64, Complex64::new(1., 0.));
+
 macro_rules! impl_maxvol {
   ($complex_type_name:ident, $type_name:ident, $complex_one:expr, $complex_zero:expr) => {
     impl NDArray<*mut $complex_type_name, 2> {
-      /// This method runs Maxvol algorithm for a matrix self of size m x n, where m <= n.
-      /// It returns the order of collumns that corrseponds to the right most part of the matrix
+      /// This method runs Maxvol algorithm for a matrix self of size m x n, where m >= n.
+      /// It returns the order of rows that corrseponds to the upper most part of the matrix
       /// to be a dominant submatrix with accuracy delta. The self matrix is rewritten by the
-      /// matrix that has reshaffeled collumns according to the obtained columns order and
+      /// matrix that has reshaffeled rows according to the obtained rows order and
       /// multiplied by the inverse dominant part from the right.
       /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
       /// as for raw pointers.
@@ -456,18 +491,21 @@ macro_rules! impl_maxvol {
         let n = self.shape[1];
         if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
         if self.strides[1] < m { return Err(NDArrayError::MutableElementsOverlapping); }
-        if m > n { return Err(NDArrayError::MaxvolInputSizeMismatch(m, n)); }
-        let mut order: Vec<usize> = (0..n).collect();
-        let mut x_buff: Vec<$complex_type_name> = Vec::with_capacity(m);
-        unsafe { x_buff.set_len(m); }
-        let x = NDArray::from_mut_slice(&mut x_buff, [m, 1])?;
-        let mut y_buff: Vec<$complex_type_name> = Vec::with_capacity(n - m);
-        unsafe { y_buff.set_len(n - m); }
-        let y = NDArray::from_mut_slice(&mut y_buff, [1, n - m])?;
-        let (a, b) = self.split_across_axis(1, m).unwrap();
-        unsafe { a.solve(b) }?;
-        unsafe { (0..(m * m)).into_iter().zip(a.into_f_iter()).for_each(|(i, x)| {
-          if i % (m + 1) == 0 { *x.0 = $complex_one } else { *x.0 = $complex_zero }
+        if m < n { return Err(NDArrayError::MaxvolInputSizeMismatch(m, n)); }
+        let mut order: Vec<usize> = (0..m).collect();
+        let mut x_buff: Vec<$complex_type_name> = Vec::with_capacity(m - n);
+        unsafe { x_buff.set_len(m - n); }
+        let x = NDArray::from_mut_slice(&mut x_buff, [m - n, 1])?;
+        let mut y_buff: Vec<$complex_type_name> = Vec::with_capacity(n);
+        unsafe { y_buff.set_len(n); }
+        let y = NDArray::from_mut_slice(&mut y_buff, [1, n])?;
+        let ipiv = self.maxvol_preprocess()?;
+        for (i, j) in ipiv.into_iter().enumerate() {
+          order.swap(i, j-1);
+        }
+        let (a, b) = self.split_across_axis(0, n)?;
+        unsafe { (0..(n * n)).into_iter().zip(a.into_f_iter()).for_each(|(i, x)| {
+          if i % (n + 1) == 0 { *x.0 = $complex_one } else { *x.0 = $complex_zero }
         }) };
         let mut val;
         let mut indices;
@@ -477,14 +515,14 @@ macro_rules! impl_maxvol {
           let col_num = unsafe { *indices.get_unchecked(1) };
           if val.abs() < delta + 1. { break; }
           let bij = *b.at(indices)?;
-          let col = b.subarray([0..m, col_num..(col_num + 1)])?;
-          let row = b.subarray([row_num..(row_num + 1), 0..(n - m)])?;
+          let col = b.subarray([0..(m - n), col_num..(col_num + 1)])?;
+          let row = b.subarray([row_num..(row_num + 1), 0..n])?;
           col.write_to(x)?;
           row.write_to(y)?;
-          *x.at([row_num, 0])? -= $complex_one;
-          *y.at([0, col_num])? += $complex_one;
+          *x.at([row_num, 0])? += $complex_one;
+          *y.at([0, col_num])? -= $complex_one;
           b.rank1_update(x, y, -$complex_one / bij)?;
-          order.swap(row_num, col_num + m);
+          order.swap(col_num, row_num + n);
         }
         Ok(order)
       }
@@ -796,32 +834,34 @@ use num_complex::{
       let a = NDArray::from_mut_slice(&mut a_buff, [m, n]).unwrap();
       let a_copy = NDArray::from_slice(&a_buff_copy, [m, n]).unwrap();
       let new_order = a.maxvol($delta).unwrap();
-      let (mut reordered_a_buff, _) = a_copy.gen_f_array_from_axis_order(&new_order[..], 1);
-      let reordered_a = NDArray::from_mut_slice(&mut reordered_a_buff, [m, n]).unwrap();
-      let (lhs, rhs) = reordered_a.split_across_axis(1, m).unwrap();
+      let (mut reordered_a_buff, _) = a_copy.transpose([1, 0]).unwrap().gen_f_array_from_axis_order(&new_order[..], 1);
+      let reordered_a = NDArray::from_mut_slice(&mut reordered_a_buff, [n, m]).unwrap();
+      let (lhs, rhs) = reordered_a.split_across_axis(1, n).unwrap();
       lhs.solve(rhs).unwrap();
       let max_val = rhs.into_f_iter().max_by(|x, y| {
         (*x.0).abs().partial_cmp(&(*y.0).abs()).unwrap()
       });
-      assert!((*max_val.unwrap().0).abs() < 1. + $delta);
+      assert!((*max_val.unwrap().0).abs() < 1. + $delta, "lhs: {}, rhs: {}", (*max_val.unwrap().0).abs(), 1. + $delta);
+      rhs.transpose([1, 0]).unwrap().sub_inpl(a.subarray([n..m, 0..n]).unwrap()).unwrap();
+      assert!(rhs.norm_n_pow_n(2) < 1e-5);
     };
   }
 
   #[test]
   fn test_maxvol() {
     unsafe {
-      test_maxvol!((50, 120), random_normal_f32, 0.1 );
-      test_maxvol!((50, 120), random_normal_f64, 0.1 );
-      test_maxvol!((50, 120), random_normal_c32, 0.1 );
-      test_maxvol!((50, 120), random_normal_c64, 0.1 );
-      test_maxvol!((50, 120), random_normal_f32, 0.01);
-      test_maxvol!((50, 120), random_normal_f64, 0.01);
-      test_maxvol!((50, 120), random_normal_c32, 0.01);
-      test_maxvol!((50, 120), random_normal_c64, 0.01);
-      test_maxvol!((50, 120), random_normal_f32, 0.  );
-      test_maxvol!((50, 120), random_normal_f64, 0.  );
-      test_maxvol!((50, 120), random_normal_c32, 0.  );
-      test_maxvol!((50, 120), random_normal_c64, 0.  );
+      test_maxvol!((120, 50), random_normal_f32, 0.1 );
+      test_maxvol!((120, 50), random_normal_f64, 0.1 );
+      test_maxvol!((120, 50), random_normal_c32, 0.1 );
+      test_maxvol!((120, 50), random_normal_c64, 0.1 );
+      test_maxvol!((120, 50), random_normal_f32, 0.01);
+      test_maxvol!((120, 50), random_normal_f64, 0.01);
+      test_maxvol!((120, 50), random_normal_c32, 0.01);
+      test_maxvol!((120, 50), random_normal_c64, 0.01);
+      test_maxvol!((120, 50), random_normal_f32, 0.  );
+      test_maxvol!((120, 50), random_normal_f64, 0.  );
+      test_maxvol!((120, 50), random_normal_c32, 0.  );
+      test_maxvol!((120, 50), random_normal_c64, 0.  );
     }
   }
 }

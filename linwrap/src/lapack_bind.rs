@@ -7,6 +7,49 @@ use std::ffi::{
 
 use num_complex::{Complex64, Complex32};
 
+macro_rules! getrf {
+  ($fn_name:ident, $type_name:ident) => {
+    pub(super) fn $fn_name (
+      m:    *const c_int,
+      n:    *const c_int,
+      a:    *mut   $type_name,
+      lda:  *const c_int,
+      ipiv: *mut   c_int,
+      info: *mut   c_int,
+    );
+  }
+}
+
+extern "C" {
+  getrf!(sgetrf_, f32      );
+  getrf!(dgetrf_, f64      );
+  getrf!(cgetrf_, Complex32);
+  getrf!(zgetrf_, Complex64);
+}
+
+/*macro_rules! getrs {
+  ($fn_name:ident, $type_name:ident) => {
+    pub(super) fn $fn_name (
+      trans: *const c_char,
+      n:     *const c_int,
+      nrhs:  *const c_int,
+      a:     *mut   $type_name,
+      lda:   *const c_int,
+      ipiv:  *mut   c_int,
+      b:     *mut   $type_name,
+      ldb:   *const c_int,
+      info:  *mut   c_int,
+    );
+  }
+}
+
+extern "C" {
+  getrs!(sgetrs_, f32      );
+  getrs!(dgetrs_, f64      );
+  getrs!(cgetrs_, Complex32);
+  getrs!(zgetrs_, Complex64);
+}*/
+
 // TODO?: switch to the expert mode (@gesvx)
 macro_rules! gesv {
   ($fn_name:ident, $type_name:ident) => {
