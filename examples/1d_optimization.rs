@@ -22,12 +22,12 @@ fn main() {
     let acc = 1e-9;    // Accuracy
     let alpha = -1e-1; // Time step
     // Function representation in the TT format
-    let mut tt = TTVec::<f64>::ttcross(&[2; 40], 30, 0.001, target_function, 6).unwrap();
+    let (mut tt, _) = TTVec::<f64>::ttcross(&[2; 40], 30, 0.001, target_function, 6, false).unwrap();
     tt.set_into_left_canonical().unwrap();
     tt.truncate_left_canonical(acc).unwrap();
     println!("Bond dimensions after TT representation reconstruction and truncation {:?}", tt.get_bonds());
     // A tensor that converts index to a function argument
-    let tt_idx_to_arg = TTVec::<f64>::ttcross(&[2; 40], 2, 0.001, idx_to_arg, 4).unwrap();
+    let (tt_idx_to_arg, _) = TTVec::<f64>::ttcross(&[2; 40], 2, 0.001, idx_to_arg, 4, false).unwrap();
     // A target tensor that is being evolved in imag. time
     let mut target = TTVec::<f64>::new_ones(vec![2; 40]);
     // An "evolution operator"

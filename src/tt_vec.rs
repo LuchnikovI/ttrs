@@ -118,13 +118,15 @@ macro_rules! impl_random {
                 delta: $real_type,
                 f: impl Fn(&[usize]) -> $complex_type + Sync,
                 sweeps_num: usize,
-            ) -> TTResult<Self> {
+                tt_opt: bool,
+            ) -> TTResult<(Self, Option<Vec<usize>>)> {
                 let kers_num = mode_dims.len();
-                let mut builder = <$cross_type>::new(max_rank, delta, mode_dims);
+                let mut builder = <$cross_type>::new(max_rank, delta, mode_dims, tt_opt);
                 for _ in 0..(kers_num * sweeps_num) {
                   builder.next(&f)?;
                 }
-                Ok(builder.to_tt()) 
+                let argabsmax = builder.get_tt_opt_argmax();
+                Ok((builder.to_tt(), argabsmax))
             }
           
             pub fn new_ones(
@@ -316,7 +318,7 @@ mod tests {
   macro_rules! test_optima_tt_max {
     ($complex_type:ty, $real_type:ty) => {
       let modes = vec![2; 20];
-      let tt = TTVec::<$complex_type>::ttcross(&modes, 20, 0.01, |x| <$complex_type>::from(target_function(x)), 4).unwrap();
+      let (tt, _) = TTVec::<$complex_type>::ttcross(&modes, 20, 0.01, |x| <$complex_type>::from(target_function(x)), 4, false).unwrap();
       let argmax = tt.optima_tt_max(1e-8, 10).unwrap();
       assert!((idx_to_arg(&argmax) - 2.512345678).abs() < 1e-5)
     };

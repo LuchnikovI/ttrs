@@ -109,7 +109,7 @@ fn main() {
     let mut rng = thread_rng();
     let mode_dims = [4; 50];
     let sweeps_num = 4;
-    let mut tt = TTVec::<f64>::ttcross(&mode_dims, 50, 0.0001, |x| unsafe { run_mdp(x) }, sweeps_num).unwrap();
+    let (mut tt, _) = TTVec::<f64>::ttcross(&mode_dims, 50, 0.0001, |x| unsafe { run_mdp(x) }, sweeps_num, false).unwrap();
     println!("Exact reward value vs predicted:");
     for _ in 0..10 {
         let random_seq: Vec<_> = (0..50).map(|_| { rng.gen::<usize>() % 4 }).collect();

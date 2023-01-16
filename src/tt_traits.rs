@@ -650,8 +650,11 @@ macro_rules! tt_impl {
         let mut tt = self.clone();
         tt.set_into_left_canonical()?;
         tt.truncate_left_canonical(delta)?;
-        for _ in 0..power_iterations_max_num {
+        for i in 0..power_iterations_max_num {
           if tt.get_tt_rank() > max_rank {
+            println!("Power iteration reached the critical TT rank 
+            (critical TT rank: {}, reached TT rank: {}) at iteration {},
+            switching to the optima_tt_max.", max_rank, tt.get_tt_rank(), i);
             break;
           }
           tt.elementwise_prod(self)?;

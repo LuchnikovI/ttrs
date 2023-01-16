@@ -33,19 +33,21 @@ impl From<TTError> for PyErr {
 ///         stopping criteria. Typically should be small, e.g. 0.01. For
 ///         more information see "S. A. Goreinov et. al. How to Find a Good Submatrix
 ///         https://doi.org/10.1142/9789812836021_0015";
+///     tt_opt (bool): the parameter showing if one needs to track an approximate maximum modulo element
+///         as it is described in the paper https://arxiv.org/abs/2205.00293;
 /// Returns:
 ///     [TTVc64]: Tensor train object.
-#[pyclass(text_signature = "(mode_dims: List[int], rank: int, delta: double)")]
+#[pyclass(text_signature = "(mode_dims: List[int], rank: int, delta: double, tt_opt: bool)")]
 #[derive(Clone)]
 pub struct TTVc64(CBc64<TTVec<Complex64>>);
 
 #[pymethods]
 impl TTVc64 {
 
-    #[args(mode_dims, rank, delta="0.01")]
+    #[args(mode_dims, rank, delta="0.01", tt_opt="false")]
     #[new]
-    fn new(mode_dims: Vec<usize>, rank: usize, delta: f64) -> Self {
-        Self (CBc64::new(rank, delta, &mode_dims))
+    fn new(mode_dims: Vec<usize>, rank: usize, delta: f64, tt_opt: bool) -> Self {
+        Self (CBc64::new(rank, delta, &mode_dims, tt_opt))
     }
 
     /// This method returns a list with dimensions of bonds
@@ -249,6 +251,17 @@ impl TTVc64 {
     {
         let val = self.0.tt.argmax_modulo(delta, power_iterations_max_num, max_rank, k)?;
         Ok(val)
+    }
+
+    /// This method returns an approximate argument of the maximum modulo element if the flag
+    /// "tt_opt" was set at the initialization. For more details see https://arxiv.org/abs/2205.00293.
+    /// Returns:
+    ///     [Union[None, List[int]]]: approximate argument of the maximum modulo element.
+    fn tt_opt_argmax_module(
+        &self,
+    ) -> Option<Vec<usize>>
+    {
+        self.0.get_tt_opt_argmax()
     }
 
     fn __repr__(&self) -> String {
