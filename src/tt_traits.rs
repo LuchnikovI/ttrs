@@ -571,21 +571,42 @@ macro_rules! tt_impl {
         Ok(())
       }
 
-      /// This method is the implementation of the optimization method described in
-      /// https://arxiv.org/abs/2209.14808. It finds the index that corresponds to the
-      /// quasi maximum modulo element (the method is approximate). 
-      fn optima_tt_max(
+      /// This method is the combination of the optimization methods
+      /// (1) https://arxiv.org/abs/2101.03377 and (2) https://arxiv.org/abs/2209.14808
+      /// The method (1) is essentially a power iteration method. It is being run first.
+      /// It takes at most power_iterations_max_num or being terminated earlier if the
+      /// max_rank of the power of a tensor train is achieved. Then one runs (2) method
+      /// on the resulting power of a tensor train, k is the hyper parameter (for more
+      /// details see (2)), typically it is set to be equal ~ 10.
+      fn argmax_modulo(
         &self,
         delta: $real_type,
+        power_iterations_max_num: usize,
+        max_rank: usize,
         k: usize,
       ) -> TTResult<Vec<usize>>
       {
-        let len =  self.get_len();
+        let len = self.get_len();
         let mut prob = self.clone();
         prob.conj();
         prob.elementwise_prod(self)?;
         prob.set_into_left_canonical()?;
         prob.truncate_left_canonical(delta)?;
+        for i in 0..power_iterations_max_num {
+          if prob.get_tt_rank() > max_rank {
+            println!("Power iteration reached the critical TT rank 
+            (critical TT rank: {}, reached TT rank: {}) at iteration {},
+            switching to the optima_tt_max.", max_rank, prob.get_tt_rank(), i);
+            break;
+          }
+          prob.elementwise_prod(self)?;
+          prob.set_into_left_canonical()?;
+          prob.truncate_left_canonical(delta)?;
+          prob.conj();
+          prob.elementwise_prod(self)?;
+          prob.set_into_left_canonical()?;
+          prob.truncate_left_canonical(delta)?;
+        }
         let mut plug_buff = vec![$complex_one];
         let mut right_parts: Vec<Vec<$complex_type>> = vec![Vec::new(); len];
         for (i, (ker, right_bond, left_bond, mode_dim)) in prob.iter().rev().enumerate() {
@@ -630,38 +651,6 @@ macro_rules! tt_impl {
         }
         let (argmax, _) = values_buff.into_iter().enumerate().max_by(|(_, x), (_, y)| x.abs().partial_cmp(&y.abs()).unwrap()).unwrap();
         Ok(args[argmax].clone())
-      }
-
-      /// This method is the combination of the optimization methods
-      /// (1) https://arxiv.org/abs/2101.03377 and (2) https://arxiv.org/abs/2209.14808
-      /// The method (1) is essentially a power iteration method. It is being run first.
-      /// It takes at most power_iterations_max_num or being terminated earlier if the
-      /// max_rank of the power of a tensor train is achieved. Then one runs (2) method
-      /// on the resulting power of a tensor train, k is the hyper parameter (for more
-      /// details see (2)), typically it is set to be equal ~ 10.
-      fn argmax_modulo(
-        &self,
-        delta: $real_type,
-        power_iterations_max_num: usize,
-        max_rank: usize,
-        k: usize,
-      ) -> TTResult<Vec<usize>>
-      {
-        let mut tt = self.clone();
-        tt.set_into_left_canonical()?;
-        tt.truncate_left_canonical(delta)?;
-        for i in 0..power_iterations_max_num {
-          if tt.get_tt_rank() > max_rank {
-            println!("Power iteration reached the critical TT rank 
-            (critical TT rank: {}, reached TT rank: {}) at iteration {},
-            switching to the optima_tt_max.", max_rank, tt.get_tt_rank(), i);
-            break;
-          }
-          tt.elementwise_prod(self)?;
-          tt.set_into_left_canonical()?;
-          tt.truncate_left_canonical(delta)?;
-        }
-        tt.optima_tt_max(delta, k)
       }
     }
   }

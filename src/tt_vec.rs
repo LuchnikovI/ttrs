@@ -315,18 +315,18 @@ mod tests {
       ((arg - 2.512345678).powi(2) + 1e-3).ln() * (15. * (arg - 2.512345678)).cos()
   }
 
-  macro_rules! test_optima_tt_max {
+  macro_rules! test_argmax_modulo {
     ($complex_type:ty, $real_type:ty) => {
       let modes = vec![2; 20];
       let (tt, _) = TTVec::<$complex_type>::ttcross(&modes, 20, 0.01, |x| <$complex_type>::from(target_function(x)), 4, false).unwrap();
-      let argmax = tt.optima_tt_max(1e-8, 10).unwrap();
+      let argmax = tt.argmax_modulo(1e-8, 0, 0, 10).unwrap();
       assert!((idx_to_arg(&argmax) - 2.512345678).abs() < 1e-5)
     };
   }
 
   #[test]
   fn test_optima_tt_max() {
-    test_optima_tt_max!(f64,       f64);
-    test_optima_tt_max!(Complex64, f64);
+    test_argmax_modulo!(f64,       f64);
+    test_argmax_modulo!(Complex64, f64);
   }
 }
