@@ -1,7 +1,7 @@
-use std::ffi::{
+use std::{ffi::{
   c_char,
   c_int,
-};
+}, fmt::Debug};
 
 use num_complex::{
   Complex32,
@@ -38,6 +38,50 @@ use crate::lapack_bind::{sgesvd_, dgesvd_, cgesvd_, zgesvd_};
 use crate::lapack_bind::{sgeqrf_, dgeqrf_, cgeqrf_, zgeqrf_};
 use crate::lapack_bind::{sorgqr_, dorgqr_, cungqr_, zungqr_};
 use crate::lapack_bind::{sgetrf_, dgetrf_, cgetrf_, zgetrf_};
+
+// ---------------------------------------------------------------------- //
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LapackError {
+  /// This error appears when the linear solve lapack routine ?gesv fails.
+  ErrorGESV(c_int),
+
+  /// This error appears when the lapack routine for SVD ?gesvd fails.
+  ErrorGESVD(c_int),
+
+  /// This error appears when the lapack routine for QR decomposition ?geqrf fails. 
+  ErrorGEQRF(c_int),
+
+  /// This error appears when the lapack routine for QR decomposition postprocessing ?orgqr fails. 
+  ErrorORGQR(c_int),
+
+  /// This error appears when ?getrf lapack subroutine fails.
+  ErrorGETRF(c_int),
+
+  /// This error appears when ?getrs lapack subroutine fails.
+  ErrorGETRS(c_int),
+}
+
+impl Into<NDArrayError> for LapackError {
+  fn into(self) -> NDArrayError {
+      NDArrayError::LapackError(self)
+  }
+}
+
+impl Debug for LapackError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::ErrorGESV(code) => { f.write_str(&format!("Lapack linear systems solver (?GESV) failed with code {}.", code)) },
+      Self::ErrorGESVD(code) => { f.write_str(&format!("Lapack SVD routine (?GESVD) failed with code {}.", code)) },
+      Self::ErrorGEQRF(code) => { f.write_str(&format!("Lapack QR decomposition routine (?GEQRF) failed with code {}.", code)) },
+      Self::ErrorORGQR(code) => { f.write_str(&format!("Lapack routine for QR decomposition result postprocessing (?ORGQR) failed with code {}", code)) },
+      Self::ErrorGETRF(code) => { f.write_str(&format!("Lapack routine ?GETRF failed with code {}", code)) },
+      Self::ErrorGETRS(code) => { f.write_str(&format!("Lapack routine ?GETRS failed with code {}", code)) },
+    }
+  }
+}
+
+// ---------------------------------------------------------------------- //
 
 macro_rules! impl_matmul {
   ($fn_name:ident, $type_name:ident, $alpha:expr, $beta:expr) => {
@@ -146,7 +190,7 @@ macro_rules! impl_solve {
               &mut info,
             );
           }
-          if info != 0 { return Err(NDArrayError::ErrorGESV(info)); }
+          if info != 0 { return Err(LapackError::ErrorGESV(info).into()); }
           Ok(())
         }
     }
@@ -230,7 +274,7 @@ macro_rules! impl_svd {
           &lwork,
           rwork.as_mut_ptr(),
           &mut info) }
-        if info != 0 { return Err(NDArrayError::ErrorGESVD(info)); }
+        if info != 0 { return Err(LapackError::ErrorGESVD(info).into()); }
         Ok(())
       }
     }
@@ -276,7 +320,7 @@ macro_rules! impl_householder {
           &lwork,
           &mut info,
         );
-        if info != 0 { return Err(NDArrayError::ErrorGEQRF(info)); }
+        if info != 0 { return Err(LapackError::ErrorGEQRF(info).into()); }
         Ok(())
       }
     }
@@ -325,7 +369,7 @@ macro_rules! impl_householder_to_q {
           &lwork,
           &mut info,
         );
-        if info != 0 { return Err(NDArrayError::ErrorORGQR(info)); }
+        if info != 0 { return Err(LapackError::ErrorORGQR(info).into()); }
         Ok(())
       }
     } 

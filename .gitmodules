@@ -1,0 +1,3 @@
+[submodule "linwrap/arpack-ng"]
+	path = linwrap/arpack-ng
+	url = https://github.com/opencollab/arpack-ng

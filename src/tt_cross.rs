@@ -4,7 +4,7 @@ use num_complex::{
   ComplexFloat,
 };
 use num_traits::Zero;
-
+use serde::{Serialize, Deserialize};
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -34,7 +34,7 @@ use crate::tt_traits::{
   TTError,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 enum DMRGState {
   ToLeft,
   ToRight,
@@ -43,7 +43,7 @@ enum DMRGState {
 macro_rules! impl_cross_builder {
   ($cross_name:ident, $complex_type:ty, $real_type:ty, $tt_trait:ident, $fn_gen:ident) => {
 
-    #[derive(Debug, Clone)]
+    #[derive(Serialize, Deserialize, Debug, Clone)]
     pub struct $cross_name<T: $tt_trait> {
       pub(super) tt: T,
       left_indices: Vec<Vec<Vec<usize>>>,

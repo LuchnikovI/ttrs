@@ -10,6 +10,8 @@ mod blas_bind;
 mod linalg;
 mod lapack_bind;
 mod linalg_utils;
+mod arpack_bind;
+pub mod sparse_linalg;
 pub mod init_utils;
 pub use crate::ndarray::NDArray;
 pub use crate::ndarray::NDArrayError;

@@ -1,7 +1,6 @@
 use std::{
   fmt::Debug,
   fmt::Display,
-  ffi::c_int,
   ops::Range,
 };
 
@@ -14,10 +13,11 @@ use rawpointer::PointerExt;
 
 use crate::{
   par_ptr_wrapper::ParPtrWrapper,
+  linalg::LapackError,
   ndarray_utils::{
     shape_to_strides,
     get_cache_friendly_order,
-  },
+  }, sparse_linalg::SparseLinalgError,
 };
 
 // ---------------------------------------------------------------------- //
@@ -71,23 +71,11 @@ pub enum NDArrayError {
   /// This error appears when one try to transpose an array with an incorrect indices order
   IncorrectIndicesOrder(Box<[usize]>),
 
-  /// This error appears when the linear solve lapack routine ?gesv fails.
-  ErrorGESV(c_int),
+  /// This error appears when one of Lapack subroutines fails
+  LapackError(LapackError),
 
-  /// This error appears when the lapack routine for SVD ?gesvd fails.
-  ErrorGESVD(c_int),
-
-  /// This error appears when the lapack routine for QR decomposition ?geqrf fails. 
-  ErrorGEQRF(c_int),
-
-  /// This error appears when the lapack routine for QR decomposition postprocessing ?orgqr fails. 
-  ErrorORGQR(c_int),
-
-  /// This error appears when ?getrf lapack subroutine fails.
-  ErrorGETRF(c_int),
-
-  /// This error appears when ?getrs lapack subroutine fails.
-  ErrorGETRS(c_int),
+  /// This error appears when one of sparse linalg subroutines fails
+  SparseLinalgError(SparseLinalgError),
 
   /// This error appears when the Fortran layout is required and 
   /// an array has a layout different to the Fortran layout
@@ -115,15 +103,11 @@ impl Debug for NDArrayError {
         NDArrayError::BroadcastingError(shape1, shape2) => { f.write_str(&format!("Impossible to broadcast arrays of shapes {:?} and {:?}.", &shape1[..], &shape2[..]))},
         NDArrayError::NotContiguous => { f.write_str("Array is not contiguous in memory.")},
         NDArrayError::IncorrectIndicesOrder(order) => { f.write_str(&format!("Incorrect transposition specification {:?}.", order)) },
-        NDArrayError::ErrorGESV(code) => { f.write_str(&format!("Lapack linear systems solver (?GESV) failed with code {}.", code)) },
-        NDArrayError::ErrorGESVD(code) => { f.write_str(&format!("Lapack SVD routine (?GESVD) failed with code {}.", code)) },
-        NDArrayError::ErrorGEQRF(code) => { f.write_str(&format!("Lapack QR decomposition routine (?GEQRF) failed with code {}.", code)) },
-        NDArrayError::ErrorORGQR(code) => { f.write_str(&format!("Lapack routine for QR decomposition result postprocessing (?ORGQR) failed with code {}", code)) },
-        NDArrayError::ErrorGETRF(code) => { f.write_str(&format!("Lapack routine ?GETRF failed with code {}", code)) },
-        NDArrayError::ErrorGETRS(code) => { f.write_str(&format!("Lapack routine ?GETRS failed with code {}", code)) },
         NDArrayError::FortranLayoutRequired => { f.write_str("Array has non-Fortran layout.")},
         NDArrayError::MutableElementsOverlapping => { f.write_str("Strides and a shape allows mutable elements overlapping.") },
         NDArrayError::IncorrectRange => { f.write_str("Invalid range for sub-array specification.")},
+        NDArrayError::LapackError(e) => { f.write_str(&format!("Lapack error: {:?}", e)) },
+        NDArrayError::SparseLinalgError(e) => { f.write_str(&format!("Arpack error: {:?}", e)) },
       }
   }
 }

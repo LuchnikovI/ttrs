@@ -9,10 +9,14 @@ num-complex = "0.4.2"
 rawpointer = "0.2.1"
 rand = "0.8.5"
 rand_distr = "0.4.3"
-blas-src = { version = "0.8", features = ["blis"] }
+blas-src = { version = "0.8", features = ["openblas"] }
 lapack-src = { version = "0.8", features = ["openblas"] }
 
 [dev-dependencies]
 ndarray = "0.15.6"
 ndarray_einsum_beta = "0.7.0"
 ndarray-rand = "0.14.0"
+
+[build-dependencies]
+cmake = "0.1"
+pkg-config = "0.3"

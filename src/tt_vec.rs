@@ -2,6 +2,7 @@ use num_complex::{
     Complex32,
     Complex64,
 };
+use serde::{Serialize, Deserialize};
 use linwrap::init_utils::{
     random_normal_f32,
     random_normal_f64,
@@ -27,7 +28,7 @@ use crate::tt_cross::{
 
 use crate::utils::build_bonds;
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TTVec<T>
 {
     pub(super) kernels:     Vec<Vec<T>>,
