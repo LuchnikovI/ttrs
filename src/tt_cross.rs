@@ -57,11 +57,16 @@ macro_rules! impl_cross_builder {
 
     impl<T: $tt_trait> $cross_name<T>
     {
-      /// This method initialize a TTCross builder.
-      /// As an input it takes a maximal TT rank, a parameter delta,
-      /// that specifies a stopping criteria of Maxvol algorithm (it should
-      /// be sufficiently small, for example 0.01) and dimensions of Tensor Train
-      /// modes.
+      /// Returns a TTCross based builder of a Tensor Train.
+      ///
+      /// # Arguments
+      /// 
+      /// * 'rank' - maximal TT rank allowed during the method execution
+      /// * 'delta' - the accuracy of the maxvol algorithm (typically should be
+      ///   somewhat small, e.g. 0.01)
+      /// * 'mode_dims' - a vector with dimensions of each mode of a Tensor Train
+      /// * 'tt_opt' - a boolean flag showing if one needs to track data for TTOpt
+      ///   optimization method (see https://arxiv.org/abs/2205.00293)
       pub fn new(
         rank: usize,
         delta: $real_type,
@@ -84,10 +89,14 @@ macro_rules! impl_cross_builder {
           absmax,
         }
       }
-      /// This method turns TTCross builder into the corresponding Tensor Train.
+      /// Turns a TTCross builder into the corresponding Tensor Train.
       pub fn to_tt(self) -> T {
         self.tt
       }
+      /// Returns the modulo argmax index found by the TTOpt method
+      /// (see https://arxiv.org/abs/2205.00293) if flag tt_opt was turned
+      /// ON at the initialization. Note, that TTOpt method finds maximum
+      /// modulo element only approximately.
       pub fn get_tt_opt_argmax(&self) -> Option<Vec<usize>> {
         self.argabsmax.clone()
       }
@@ -104,8 +113,11 @@ macro_rules! impl_next {
   ($cross_name:ident, $tt_trait:ident, $complex_type:ty, $complex_zero:expr, $fn_uninit_buff:ident, $fn_eye:ident) => {
     impl<T: $tt_trait> $cross_name<T> {
 
-      /// This method returns either an iterator over indices that must be evaluated or None.
+      /// Returns either an iterator over indices that must be evaluated or None.
       /// In case of None, nothing should be evaluated at the current step.
+      ///
+      /// # Note
+      /// This method is mostly for development needs.
       pub(super) fn get_args(
         &self,
       ) -> Option<impl IndexedParallelIterator<Item = Vec<usize>>>
@@ -154,7 +166,13 @@ macro_rules! impl_next {
         }
       }
 
-      /// This method perform an update step according to the obtained evaluated tensor elements.
+      /// Performs an update step according to the obtained evaluated tensor elements.
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'measurements' - an optional iterator over elements which were evaluated
+      /// 
+      /// This method is mostly for development needs.
       pub(super) fn update(
         &mut self,
         measurements: Option<impl IndexedParallelIterator<Item = $complex_type>>
@@ -285,9 +303,13 @@ macro_rules! impl_next {
         Ok(())
       }
 
-      /// This method performs a step of cross approximation procedure. As an input it takes function
-      /// that one tries to represent in terms of a Tensor Train. It evaluates the function
-      /// number of times under the hood and update an estimation of a Tensor Train.
+      /// Performs a step of cross approximation.
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'f' - function, which is being reconstructed
+      /// 
+      /// # Note the result is meaningful only when number of steps n holds n % modes_number == 0.
       pub(super) fn next(
         &mut self,
         f: impl Fn(&[usize]) -> $complex_type + Sync,

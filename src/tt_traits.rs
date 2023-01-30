@@ -33,26 +33,29 @@ use crate::utils::{
 #[derive(Debug)]
 pub enum TTError {
 
-  /// This error appears when error happens at the level of NDArray
+  /// Appears when error happens at the level of NDArray
   NDArrayError(NDArrayError),
 
-  /// This error appears when two Tensor Trains have different length
+  /// Appears when two Tensor Trains have different length
   /// while it is required them to be equal.
   LengthsMismatch,
 
-  /// This error appears when one sends an index of incorrect length to the
+  /// Appears when dims of all modes of two Tensor Trains do not match each other.
+  ModesDimsMismatch,
+
+  /// Appears when one sends an index of incorrect length to the
   /// eval method.
   IncorrectIndexLength,
 
-  /// This error appears when one sends an index that lies out of bound
+  /// Appears when one sends an index that lies out of bound
   /// of a Tensor Train to the eval method.
   OutOfBound,
 
-  /// This error appears when local a mode dimensions of two Tensor Trains do
+  /// Appears when local a mode dimensions of two Tensor Trains do
   /// not match each other, while it is required them to be.
   IncorrectLocalDim,
 
-  /// This error appears when one calls TTCross update with empty updates, while
+  /// Appears when one calls TTCross update with empty updates, while
   /// some updates are required.
   EmptyUpdate,
 }
@@ -149,58 +152,105 @@ macro_rules! tt_impl {
       type Buff: AsMut<[$complex_type]> + AsRef<[$complex_type]>;
       type Kers: AsMut<[Self::Buff]> + AsRef<[Self::Buff]>;
 
-      /// This method generates a new Tensor Train with random kernels.
-      /// As an input it takes a vector with dimensions of each mode and
-      /// maximal TT rank.
+      /// Returns a random Tensor Train given the modes dimensions.
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'mode_dims' - a vector of dimensions of each mode.
+      /// * 'max_rank' - maximal TT rank.
       fn new_random(
         mode_dims: Vec<usize>,
         max_rank:  usize,
       ) -> Self;
 
-      /// This method returns a slice with kernels.
+      /// Returns a slice with kernels.
+      /// 
+      /// # Note
+      /// 
+      /// This method is mostly for development needs.
       fn get_kernels(&self) -> &[Self::Buff];
 
-      /// This method returns a slice with left bond dimensions.
+      /// Returns a slice with left bond dimensions.
+      ///
+      /// # Note
+      ///
+      /// This method is mostly for development needs.
       fn get_left_bonds(&self) -> &[usize];
 
-      /// This method returns a slice with right bond dimensions.
+      /// Returns a slice with right bond dimensions.
+      /// 
+      /// # Note
+      /// 
+      /// This method is mostly for development needs.
       fn get_right_bonds(&self) -> &[usize];
 
-      /// This method returns a slice with modes dimensions.
+      /// Returns a slice with modes dimensions.
       fn get_mode_dims(&self) -> &[usize];
       
-      /// This method returns number of modes.
+      /// Returns number of modes.
       fn get_len(&self) -> usize;
 
-      /// This method returns an iterator over components of a Tensor Train.
+      /// Returns an iterator over components of a Tensor Train.
+      /// 
+      /// # Note
+      /// 
+      /// This method is mostly for development needs.
       fn iter<'a>(&'a self) -> TTIter<'a, $complex_type>;
 
-      /// This method returns a mutable slice with kernels.
-      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// Returns a mutable slice with kernels.
+      /// 
+      /// # Note
+      /// 
+      /// This method is mostly for development needs.
+      /// 
+      /// #Safety
+      /// 
+      /// Sizes of buffers and corresponding modes and bonds dimensions
       /// must be consistent with each other.
       unsafe fn get_kernels_mut(&mut self) -> &mut [Self::Buff];
 
-      /// This method returns a mutable slice with left bond dimensions.
-      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// Returns a mutable slice with left bond dimensions.
+      /// 
+      /// # Note
+      /// 
+      /// This method is mostly for development needs.
+      /// 
+      /// #Safety
+      /// 
+      /// Sizes of buffers and corresponding modes and bonds dimensions
       /// must be consistent with each other.
       unsafe fn get_left_bonds_mut(&mut self) -> &mut [usize];
 
-      /// This method returns a mutable slice with right bond dimensions.
-      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// Returns a mutable slice with right bond dimensions.
+      /// 
+      /// # Note
+      /// 
+      /// This method is mostly for development needs.
+      /// 
+      /// #Safety
+      /// 
+      /// Sizes of buffers and corresponding modes and bonds dimensions
       /// must be consistent with each other.
       unsafe fn get_right_bonds_mut(&mut self) -> &mut [usize];
 
-      /// This method returns a mutable iterator over components of a Tensor Train.
-      /// Safety: sizes of kernels buffers and corresponding modes and bonds dimensions
+      /// Returns a mutable iterator over components of a Tensor Train.
+      /// 
+      /// # Note
+      /// 
+      /// This method is mostly for development needs.
+      /// 
+      /// #Safety
+      /// 
+      /// Sizes of buffers and corresponding modes and bonds dimensions
       /// must be consistent with each other.
       unsafe fn iter_mut<'a>(&'a mut self) -> TTIterMut<'a, $complex_type>;
 
-      /// This method returns internal bond dimensions of a Tensor Train.
+      /// Returns internal bond dimensions of a Tensor Train.
       fn get_bonds(&self) -> &[usize] {
         &self.get_left_bonds()[1..]
       }
 
-      /// This method conjugates elements of a tensor inplace.
+      /// Complex conjugates elements of a Tensor Train inplace.
       fn conj(&mut self) {
         for ker in unsafe { self.get_kernels_mut() } {
           let len = ker.as_ref().len();
@@ -209,12 +259,21 @@ macro_rules! tt_impl {
         }
       }
 
-      /// This method returns a natural logarithm of dot product of two Tensor Trains.
+      /// Returns a natural logarithm of a dot product of two Tensor Trains.
+      /// If modes dimensions of Tensor Trains do not mach each other, it
+      /// returns an error.
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'other' - other Tensor Train that must have the same modes dimensions.
+      /// 
+      /// # Note
+      /// 
       /// The logarithm is necessary to make computation stable, when the value of the
-      /// dot is exponentially big.
-      /// It returns error when shapes of tensors do not match each other.
+      /// dot is exponentially large. Method returns a Complex value even for real valued
+      /// Tensor Trains, since for negative real values logarithm is a Complex number.
       fn log_dot(&self, other: &Self) -> TTResult<Complex<$real_type>> {
-        if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch); }
+        if self.get_mode_dims() != other.get_mode_dims() { return Err(TTError::ModesDimsMismatch) }
         let mut agr_buff = vec![$complex_one];
         let mut agr_val = $complex_zero;
         let iter = self.iter().zip(other.iter());
@@ -245,9 +304,14 @@ macro_rules! tt_impl {
         Ok(Complex::<$real_type>::from(agr_val) + Complex::<$real_type>::from(agr_buff[0]).ln())
       }
 
-      /// This method returns natural logarithm of the sum of all elements of a tensor.
+      /// Returns natural logarithm of the sum of all elements of a tensor
+      /// represented by a Tensor Train.
+      /// 
+      /// # Note
+      /// 
       /// The logarithm is necessary to make computation stable, when the value of the
-      /// sum is exponentially big.
+      /// sum is exponentially large. Method returns a Complex value even for real valued
+      /// Tensor Trains, since for negative real values logarithm is a Complex number.
       fn log_sum(&self) -> TTResult<Complex<$real_type>> {
         let mut agr_val = $complex_zero;
         let mut agr_buff = vec![$complex_one];
@@ -270,9 +334,14 @@ macro_rules! tt_impl {
         Ok(Complex::<$real_type>::from(agr_val) + Complex::<$real_type>::from(agr_buff[0]).ln())
       }
 
-      /// This method sets a Tensor Train into the left canonical form inplace.
+      /// Sets a Tensor Train into the left canonical form inplace.
+      ///
+      /// # Note
+      ///
       /// The L2 norm of a Tensor Train after this operation is equal to 1.
       /// The natural logarithm of norm of the initial Tensor Train is returned.
+      /// The logarithm is necessary to make computation stable, when the value of the
+      /// norm is exponentially large or small.
       fn set_into_left_canonical(&mut self) -> TTResult<$real_type> {
         let mut new_left_bond = 1;
         let mut orth_buff = unsafe { $fn_uninit_buff(1) };
@@ -311,9 +380,14 @@ macro_rules! tt_impl {
         Ok(lognorm)
       }
 
-      /// This method sets a Tensor Train into the right canonical form inplace.
+      /// Sets a Tensor Train into the right canonical form inplace.
+      ///
+      /// # Note
+      ///
       /// The L2 norm of a Tensor Train after this operation is equal to 1.
       /// The natural logarithm of norm of the initial Tensor Train is returned.
+      /// The logarithm is necessary to make computation stable, when the value of the
+      /// norm is exponentially large or small.
       fn set_into_right_canonical(&mut self) -> TTResult<$real_type> {
         let mut new_right_bond = 1;
         let mut orth_buff = unsafe { $fn_uninit_buff(1) };
@@ -353,6 +427,11 @@ macro_rules! tt_impl {
       }
 
       /// This method evaluates a natural logarithm of an element of a Tensor Train given the index.
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'index' - index for which one evaluates a value.
+      /// 
       /// The logarithm is necessary to make computation stable, when the value of the
       /// element is exponentially big or small.
       fn log_eval_index(&self, index: &[usize]) -> TTResult<Complex<$real_type>> {
@@ -378,9 +457,18 @@ macro_rules! tt_impl {
         Ok(Complex::<$real_type>::from(agr_val) + Complex::<$real_type>::from(agr_buff[0]).ln())
       }
 
-      /// This method truncates a left canonical form of a Tensor Train inplace, given an accuracy
-      /// of a local truncation delta. The L2 norm of a Tensor Train after truncation is equal to 1.
-      /// Method returns the norm of a Tensor Train as if it was not normalized by 1.
+      /// Truncates the left canonical form of a Tensor Train inplace
+      /// and normalizes it by 1. Returns L2 norm of a Tensor Train
+      /// after truncation (Could be considered as the truncation error).
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'delta' - local SVD based truncation accuracy.
+      /// 
+      /// # Note
+      /// 
+      /// This method must be run only on the left canonical form of a Tensor Train.
+      /// Otherwise, the result is meaningless.
       fn truncate_left_canonical(&mut self, delta: $real_type) -> TTResult<$real_type> {
         let mut lmbd_buff = vec![$complex_one; 1];
         let mut lmbd = NDArray::from_mut_slice(&mut lmbd_buff, [1, 1])?;
@@ -421,9 +509,18 @@ macro_rules! tt_impl {
         Ok((lmbd_buff[0].abs()))
       }
 
-      /// This method truncates a right canonical form of a Tensor Train inplace, given an accuracy
-      /// of a local truncation delta. The L2 norm of a Tensor Train after truncation is equal to 1.
-      /// Method returns the norm of a Tensor Train as if it was not normalized by 1.
+      /// Truncates the right canonical form of a Tensor Train inplace
+      /// and normalizes it by 1. Returns L2 norm of a Tensor Train
+      /// after truncation (Could be considered as the truncation error).
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'delta' - local SVD based truncation accuracy.
+      /// 
+      /// # Note
+      /// 
+      /// This method must be run only on the right canonical form of a Tensor Train.
+      /// Otherwise, the result is meaningless.
       fn truncate_right_canonical(&mut self, delta: $real_type) -> TTResult<$real_type> {
         let mut lmbd_buff = vec![$complex_one; 1];
         let mut lmbd = NDArray::from_mut_slice(&mut lmbd_buff, [1, 1])?;
@@ -464,7 +561,13 @@ macro_rules! tt_impl {
         Ok((lmbd_buff[0].abs()))
       }
 
-      /// This method multiply a given Tensor Train by another one element-wisely. 
+      /// Multiplies a given Tensor Train by another one element-wisely.
+      /// If modes dimensions of Tensor Trains do not match each other, returns
+      /// an error.
+      /// 
+      /// # Arguments 
+      /// 
+      /// 'other' - other Tensor Train with the same modes dimensions.
       fn elementwise_prod(&mut self, other: &Self) -> TTResult<()> 
       {
         if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch) }
@@ -496,7 +599,7 @@ macro_rules! tt_impl {
       }
 
       /// TODO: make it more stable?
-      /// This method multiplies a Tensor Train by a scalar inplace.
+      /// Multiplies a Tensor Train by a scalar inplace.
       fn mul_by_scalar(&mut self, scalar: $complex_type)
       {
         unsafe { self.get_kernels_mut()[0].as_mut().iter_mut() }.for_each(|x| {
@@ -504,12 +607,17 @@ macro_rules! tt_impl {
         });
       }
 
-      /// This method returns maximal bond dimension.
+      /// Returns maximal bond dimension.
       fn get_tt_rank(&self) -> usize {
         *self.get_bonds().into_iter().max().unwrap()
       }
 
-      /// This method add an other Tensor Train to a given one element-wisely. 
+      /// Adds an other Tensor Train to a given one element-wisely.
+      /// 
+      /// # Note
+      /// 
+      /// If modes dimensions of Tensor Trains do not match each other, returns
+      /// an error.
       fn elementwise_sum(&mut self, other: &Self) -> TTResult<()>
       {
         if self.get_len() != other.get_len() { return Err(TTError::LengthsMismatch) }
@@ -574,10 +682,17 @@ macro_rules! tt_impl {
       /// This method is the combination of the optimization methods
       /// (1) https://arxiv.org/abs/2101.03377 and (2) https://arxiv.org/abs/2209.14808
       /// The method (1) is essentially a power iteration method. It is being run first.
-      /// It takes at most power_iterations_max_num or being terminated earlier if the
-      /// max_rank of the power of a tensor train is achieved. Then one runs (2) method
-      /// on the resulting power of a tensor train, k is the hyper parameter (for more
+      /// It takes at most power_iterations_max_num steps or being terminated earlier if the
+      /// max_rank of the power of a Tensor Train is reached. Then one runs (2) method
+      /// on the resulting power of a Tensor Train, k is the hyper parameter (for more
       /// details see (2)), typically it is set to be equal ~ 10.
+      /// 
+      /// # Arguments
+      /// 
+      /// * 'delta' - accuracy of local truncations used in the method.
+      /// * 'power_iterations_max_num' - maximum number of power iterations.
+      /// * 'max_rank' - maximal TT rank allowed during the method execution.
+      /// * 'k' - hyperparameter of the method from (2) https://arxiv.org/abs/2209.14808.
       fn argmax_modulo(
         &self,
         delta: $real_type,

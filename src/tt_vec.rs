@@ -44,6 +44,7 @@ macro_rules! impl_tt_trait {
             type Buff = Vec<$complex_type>;
             type Kers = Vec<Self::Buff>;
 
+            #[inline]
             fn new_random(
               mode_dims: Vec<usize>,
               max_rank:  usize,
@@ -55,19 +56,22 @@ macro_rules! impl_tt_trait {
               }
               Self { kernels, left_bonds, right_bonds, mode_dims }
             }
-
+            #[inline]
             fn get_kernels(&self) ->  &[Vec<$complex_type>] {
                 &self.kernels
             }
+            #[inline]
             fn get_left_bonds(&self) ->  &[usize] {
                 &self.left_bonds
             }
+            #[inline]
             fn get_right_bonds(&self) ->  &[usize] {
                 &self.right_bonds
             }
             fn get_mode_dims(&self) ->  &[usize] {
                 &self.mode_dims
             }
+            #[inline]
             fn get_len(&self) -> usize {
                 self.kernels.len()
             }
@@ -79,15 +83,19 @@ macro_rules! impl_tt_trait {
                     mode_dims_iter: self.mode_dims.iter(),
                 }
             }
+            #[inline]
             unsafe fn get_kernels_mut(&mut self) ->  &mut[Vec<$complex_type>] {
                 &mut self.kernels
             }
+            #[inline]
             unsafe fn get_left_bonds_mut(&mut self) ->  &mut[usize] {
                 &mut self.left_bonds
             }
+            #[inline]
             unsafe fn get_right_bonds_mut(&mut self) ->  &mut[usize] {
                 &mut self.right_bonds
             }
+            #[inline]
             unsafe fn iter_mut<'a>(&'a mut self) -> TTIterMut<'a, $complex_type> {
                 TTIterMut {
                     kernels_iter: self.kernels.iter_mut(),
@@ -109,10 +117,20 @@ macro_rules! impl_random {
     ($fn_gen:ident, $complex_type:ty, $real_type:ty, $cross_type:ty, $complex_one:expr) => {
         impl TTVec<$complex_type> {
 
-            /// This method runs the TTCross algorithm reconstructing a Tensor Train representation
-            /// of a function f. As an input, it takes mode dimensions, maximal TT rank, parameter delta that determines
-            /// a Maxvol algorithm stopping criteria (this parameter should be small, e.g. 0.01),
-            /// function itself and number of DMRG sweeps that one needs to perform.
+            /// Returns a Tensor Train representation of a function and optionally 
+            /// result of TTOpt algorithm execution (see https://arxiv.org/abs/2205.00293)
+            /// that is an approximate modulo argmax index.
+            /// 
+            /// # Arguments
+            /// 
+            /// * 'mode_dims' - a vector with dimensions of each mode of a Tensor Train
+            /// * 'max_rank' - maximal TT rank allowed during the method execution
+            /// * 'delta' - the accuracy of the maxvol algorithm (typically should be
+            ///   somewhat small, e.g. 0.01)
+            /// * 'f' - function that is being reconstructed in the Tensor Train form
+            /// * 'sweeps_num' - number of sweeps (the entire Tensor Train traversals)
+            /// * 'tt_opt' - a boolean flag showing if one needs to track data for TTOpt
+            ///   optimization method (see https://arxiv.org/abs/2205.00293)
             pub fn ttcross(
                 mode_dims: &[usize],
                 max_rank: usize,
@@ -130,6 +148,8 @@ macro_rules! impl_random {
                 Ok((builder.to_tt(), argabsmax))
             }
           
+          /// Return a Tensor Train that represents a tensor with
+          /// all elements equal to 1.
             pub fn new_ones(
               mode_dims: Vec<usize>,
             ) -> Self

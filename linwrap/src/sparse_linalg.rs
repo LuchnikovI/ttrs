@@ -44,11 +44,11 @@ pub enum Which {
 impl Into<&'static str> for Which {
     fn into(self) -> &'static str {
         match self {
-            Self::LargestMagnitude => "LM",
-            Self::SmallestMagnitude => "SM",
-            Self::LargestRealPart => "LR",
-            Self::SmallestRealPart => "SR",
-            Self::LargestImaginaryPart => "LI",
+            Self::LargestMagnitude      => "LM",
+            Self::SmallestMagnitude     => "SM",
+            Self::LargestRealPart       => "LR",
+            Self::SmallestRealPart      => "SR",
+            Self::LargestImaginaryPart  => "LI",
             Self::SmallestImaginaryPart => "SI",
         }
     }
@@ -58,7 +58,6 @@ impl Into<&'static str> for Which {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SparseLinalgError {
-    TooManyEigenVectorsRequested,
     EigenVectorsAndValuesNumberMismatch,
     WrongParameters(&'static str),
     ErrorWithCode(c_int),
@@ -73,7 +72,6 @@ impl Into<NDArrayError> for SparseLinalgError {
 impl Debug for SparseLinalgError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SparseLinalgError::TooManyEigenVectorsRequested => { f.write_str("Too many eigenvectors/eigenvalues were requested.") },
             SparseLinalgError::EigenVectorsAndValuesNumberMismatch => { f.write_str("Sizes of buffers for eigenvectors and eigenvalues do not match.") },
             SparseLinalgError::WrongParameters(s) => { f.write_str(&format!("Incorrect input parameters: {:?}", s)) },
             SparseLinalgError::ErrorWithCode(c) => {f.write_str(&format!("Error with code {:?}, see Arpack documentation.", c))}
@@ -105,7 +103,6 @@ macro_rules! impl_sparse_eigensolve {
         {
             if vecs.layout != Layout::Fortran { return Err(NDArrayError::FortranLayoutRequired); }
             if vals.layout != Layout::Fortran { return Err(NDArrayError::FortranLayoutRequired); }
-            if vecs.shape[0] < 2 * vecs.shape[1] + 1 { return Err(SparseLinalgError::TooManyEigenVectorsRequested.into()) }
             if vecs.shape[1] != vals.shape[0] { return  Err(SparseLinalgError::EigenVectorsAndValuesNumberMismatch.into()); }
             let mut ido: c_int = 0;
             let bmat = 'I' as c_char;
@@ -113,7 +110,7 @@ macro_rules! impl_sparse_eigensolve {
             let which = Into::<&str>::into(mode).as_ptr() as *const c_char;
             let nev = vecs.shape[1] as c_int;
             let mut resid = $complex_uninit_buff_fn(n as usize);
-            let ncv = 2 * nev + 1;
+            let ncv = std::cmp::min(std::cmp::max(2 * nev + 1, 20), n);
             let mut v = $complex_uninit_buff_fn(n as usize * ncv as usize);
             let ldv = n;
             let mut iparam = [0; 11];
@@ -243,7 +240,7 @@ mod tests {
             $accuracy:expr
         ) => {
             let n = 100;
-            let nev = 2;
+            let nev = 3;
             let mut m_buff = $random_init_fn(n * n);
             let mut m_buff_conj = m_buff.clone();
             let m = NDArray::from_mut_slice(&mut m_buff, [n, n]).unwrap();
@@ -268,11 +265,27 @@ mod tests {
                 $name(
                     &op,
                     $which,
-                    1e-10,
-                    1000000,
+                    $accuracy,
+                    10000,
                     eigvecs,
                     eigvals,
                 ).unwrap()
+            }
+            let (mut _egivecs_h_buff, eigvecs_h) = unsafe { eigvecs.transpose([1, 0]).unwrap().gen_f_array() };
+            unsafe { eigvecs_h.conj() };
+            let mut eigvecs_prod_buff = vec![$complex_zero; nev * nev];
+            let eigvecs_prod = NDArray::from_mut_slice(&mut eigvecs_prod_buff, [nev, nev]).unwrap();
+            unsafe { eigvecs_prod.matmul_inplace(eigvecs_h, eigvecs).unwrap() }
+            unsafe {
+                eigvecs_prod.into_f_iter().enumerate().for_each(|(i, x)| {
+                    if i % (nev + 1) == 0 {
+                        assert!((*x.0).im.abs() < $accuracy);
+                        assert!(((*x.0).re - 1.).abs() < $accuracy);
+                    } else {
+                        assert!((*x.0).im.abs() < $accuracy);
+                        assert!((*x.0).re.abs() < $accuracy);
+                    }
+                });
             }
             let mut m_eigvecs_buff = vec![$complex_zero; n * nev];
             let m_eigvecs = NDArray::from_mut_slice(&mut m_eigvecs_buff, [n, nev]).unwrap();
