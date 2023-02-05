@@ -287,7 +287,7 @@ where
 
 macro_rules! impl_with_deref {
   ($ptr_type:ident) => {
-    impl<T: Clone + Copy + Display + PartialEq + Send + 'static, const N: usize> NDArray<*$ptr_type T, N>
+    impl<T: Clone + Copy + Send + 'static, const N: usize> NDArray<*$ptr_type T, N>
     {
       /// This method writes data from one array to other.
       /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
@@ -315,6 +315,39 @@ macro_rules! impl_with_deref {
         (buff, arr.into())
       }
 
+      /// This method generates a buffer and the corresponding array of Fortran layout with
+      /// a dedicated axis being permuted according to the given order.
+      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+      /// as for raw pointers.
+      pub unsafe fn gen_f_array_from_axis_order(
+        mut self,
+        order: &[usize],
+        axis: usize,
+      ) -> (Vec<T>, NDArray<*$ptr_type T, N>)
+      {
+        self.shape[axis] = order.len();
+        let ptr = ParPtrWrapper(self.ptr);
+        let size = self.shape.into_iter().product::<usize>();
+        let mut buff: Vec<T> = (0..size).into_iter().map(move |mut x| {
+          let mut cur_ptr = ptr;
+          for i in 0..N {
+            let dim = *self.shape.get_unchecked(i);
+            cur_ptr = if i != axis {
+              cur_ptr.add(self.strides.get_unchecked(i) * (x % dim))
+            } else {
+              cur_ptr.add(self.strides.get_unchecked(axis) * order.get_unchecked(x % dim))
+            };
+            x /= dim;
+          }
+        *cur_ptr.0
+        }).collect();
+        let arr = NDArray::from_mut_slice(&mut buff, self.shape).unwrap();
+        (buff, arr.into())
+      }
+    }
+
+    impl<T: Display, const N: usize> NDArray<*$ptr_type T, N>
+      {
       /// This method convert an array to its text representation. It replaces an implementation of
       /// the Debug trait, since it is unsafe method.
       /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
@@ -376,6 +409,10 @@ macro_rules! impl_with_deref {
         }
         msg
       }
+    }
+
+    impl<T: PartialEq + 'static, const N: usize> NDArray<*$ptr_type T, N>
+      {
 
       ///This method checks the equality of two arrays.
       /// It is replacement of the PartialEq trait implementation,
@@ -400,36 +437,6 @@ macro_rules! impl_with_deref {
           ptr = ptr.add(self.strides.get_unchecked(i) * idx);
         }
         Ok(ptr)
-      }
-
-      /// This method generates a buffer and the corresponding array of Fortran layout with
-      /// a dedicated axis being permuted according to the given order.
-      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
-      /// as for raw pointers.
-      pub unsafe fn gen_f_array_from_axis_order(
-        mut self,
-        order: &[usize],
-        axis: usize,
-      ) -> (Vec<T>, NDArray<*$ptr_type T, N>)
-      {
-        self.shape[axis] = order.len();
-        let ptr = ParPtrWrapper(self.ptr);
-        let size = self.shape.into_iter().product::<usize>();
-        let mut buff: Vec<T> = (0..size).into_iter().map(move |mut x| {
-          let mut cur_ptr = ptr;
-          for i in 0..N {
-            let dim = *self.shape.get_unchecked(i);
-            cur_ptr = if i != axis {
-              cur_ptr.add(self.strides.get_unchecked(i) * (x % dim))
-            } else {
-              cur_ptr.add(self.strides.get_unchecked(axis) * order.get_unchecked(x % dim))
-            };
-            x /= dim;
-          }
-        *cur_ptr.0
-        }).collect();
-        let arr = NDArray::from_mut_slice(&mut buff, self.shape).unwrap();
-        (buff, arr.into())
       }
     }
   };

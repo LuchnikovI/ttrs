@@ -1,12 +1,14 @@
-use std::{ffi::{
-  c_char,
-  c_int,
-}, fmt::Debug};
+use std::{
+  ffi::{
+    c_char,
+    c_int,
+  },
+  fmt::Debug,
+};
 
-use num_complex::{
-  Complex32,
-  Complex64,
-  Complex,
+use num_traits::{
+  ToPrimitive,
+  One,
 };
 
 /*use rayon::iter::ParallelIterator;
@@ -21,23 +23,14 @@ use crate::{
     Layout,
   },
   linalg_utils::triangular_split,
+    LinalgComplex,
+    LinalgReal,
 };
-
-use num_complex::ComplexFloat;
 
 // TODO: get advantage of the generalized storage (arbitrary strides).
 // TODO: refactor maxvol
 // TODO: refactor all tests
 // TODO: add documentation
-
-use crate::blas_bind::{sgemm_, dgemm_, cgemm_, zgemm_};
-use crate::blas_bind::{sger_, dger_, cgeru_, zgeru_};
-use crate::blas_bind::{strsm_, dtrsm_, ctrsm_, ztrsm_};
-use crate::lapack_bind::{sgesv_, dgesv_, cgesv_, zgesv_};
-use crate::lapack_bind::{sgesvd_, dgesvd_, cgesvd_, zgesvd_};
-use crate::lapack_bind::{sgeqrf_, dgeqrf_, cgeqrf_, zgeqrf_};
-use crate::lapack_bind::{sorgqr_, dorgqr_, cungqr_, zungqr_};
-use crate::lapack_bind::{sgetrf_, dgetrf_, cgetrf_, zgetrf_};
 
 // ---------------------------------------------------------------------- //
 
@@ -83,829 +76,754 @@ impl Debug for LapackError {
 
 // ---------------------------------------------------------------------- //
 
-macro_rules! impl_matmul {
-  ($fn_name:ident, $type_name:ident, $alpha:expr, $beta:expr) => {
-    impl NDArray<*mut $type_name, 2>
+impl<T> NDArray<*mut T, 2>
+where
+  T: LinalgComplex,
+  T::Real: LinalgReal,
+{
+  /// This method performs the multiplication of matrices a and b and writes
+  /// the result into self.
+  /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+  /// as for raw pointers.
+  pub unsafe fn matmul_inplace(
+    self,
+    a: impl Into<NDArray<*const T, 2>>,
+    b: impl Into<NDArray<*const T, 2>>,
+  ) -> NDArrayResult<()>
+  {
+    let mut a = a.into();
+    let mut b = b.into();
+    let is_a_transposed = if let Layout::C = a.layout {
+      a = a.transpose([1, 0])?;
+      true
+    } else {
+      false
+    };
+    let is_b_transposed = if let Layout::C = b.layout {
+      b = b.transpose([1, 0])?;
+      true
+    } else {
+      false
+    };
+    if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+    if a.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if b.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    let (m, k) = if is_a_transposed {
+      (a.shape[1] as c_int, a.shape[0] as c_int)
+    } else {
+      (a.shape[0] as c_int, a.shape[1] as c_int)
+    };
+    let n = if is_b_transposed  {
+      if b.shape[1] as c_int != k { return Err(NDArrayError::MatmulDimMismatch(b.shape[1], k as usize)) }
+      b.shape[0] as c_int
+    } else {
+      if b.shape[0] as c_int != k { return Err(NDArrayError::MatmulDimMismatch(b.shape[0], k as usize)) }
+      b.shape[1] as c_int
+    };
+    let transa = if is_a_transposed { 'T' as c_char } else { 'N' as c_char };
+    let transb = if is_b_transposed { 'T' as c_char } else { 'N' as c_char };
+    if (m != self.shape[0] as c_int) || (n != self.shape[1] as c_int) { return Err(NDArrayError::IncorrectShape(Box::new(self.shape), Box::new([m as usize, n as usize]))); }
+    let alpha = T::one();
+    let beta = T::zero();
+    let lda = a.strides[1] as c_int;
+    let ldb = b.strides[1] as c_int;
+    let ldc = self.strides[1] as c_int;
+    unsafe {
+      T::gemm(&transa, &transb, &m, &n, &k, &alpha, a.ptr,
+            &lda, b.ptr, &ldb, &beta, self.ptr, &ldc)
+    };
+    Ok(())
+  }
+
+  /// This method solves a batch of systems of linear equations,
+  /// i.e. AX = B, where B is rhs, A is self. The solution X is written
+  /// to the rhs array. The array self is destroyed after a call of the method.
+  /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+  /// as for raw pointers.
+  pub unsafe fn solve(
+    self,
+    rhs: Self,
+  ) -> NDArrayResult<()>
     {
-      /// This method performs the multiplication of matrices a and b and writes
-      /// the result into self.
-      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
-      /// as for raw pointers.
-      pub unsafe fn matmul_inplace(
-        self,
-        a: impl Into<NDArray<*const $type_name, 2>>,
-        b: impl Into<NDArray<*const $type_name, 2>>,
-      ) -> NDArrayResult<()>
-      {
-        let mut a = a.into();
-        let mut b = b.into();
-        let is_a_transposed = if let Layout::C = a.layout {
-          a = a.transpose([1, 0])?;
-          true
-        } else {
-          false
-        };
-        let is_b_transposed = if let Layout::C = b.layout {
-          b = b.transpose([1, 0])?;
-          true
-        } else {
-          false
-        };
-        if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-        if a.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        if b.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        let (m, k) = if is_a_transposed {
-          (a.shape[1] as c_int, a.shape[0] as c_int)
-        } else {
-          (a.shape[0] as c_int, a.shape[1] as c_int)
-        };
-        let n = if is_b_transposed  {
-          if b.shape[1] as c_int != k { return Err(NDArrayError::MatmulDimMismatch(b.shape[1], k as usize)) }
-          b.shape[0] as c_int
-        } else {
-          if b.shape[0] as c_int != k { return Err(NDArrayError::MatmulDimMismatch(b.shape[0], k as usize)) }
-          b.shape[1] as c_int
-        };
-        let transa = if is_a_transposed { 'T' as c_char } else { 'N' as c_char };
-        let transb = if is_b_transposed { 'T' as c_char } else { 'N' as c_char };
-        if (m != self.shape[0] as c_int) || (n != self.shape[1] as c_int) { return Err(NDArrayError::IncorrectShape(Box::new(self.shape), Box::new([m as usize, n as usize]))); }
-        let alpha = $alpha;
-        let beta = $beta;
-        let lda = a.strides[1] as c_int;
-        let ldb = b.strides[1] as c_int;
-        let ldc = self.strides[1] as c_int;
-        unsafe {
-          $fn_name(&transa, &transb, &m, &n, &k, &alpha, a.ptr,
-                &lda, b.ptr, &ldb, &beta, self.ptr, &ldc)
-        };
-        Ok(())
+      if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+      if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+      if rhs.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+      if rhs.strides[1] < rhs.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+      if self.shape[1] != self.shape[0] { return Err(NDArrayError::SquareMatrixRequired(self.shape[0], self.shape[1])); }
+      let n = self.shape[1] as c_int;
+      if rhs.shape[0] as c_int != n { return Err(NDArrayError::IncorrectShape(Box::new(rhs.shape), Box::new([n as usize, rhs.shape[1]]))); }
+      let nrhs = rhs.shape[1] as c_int;
+      let lda = self.strides[1] as c_int;
+      let ldb = rhs.strides[1] as c_int;
+      let mut info: c_int = 0;
+      let mut ipiv_buff = Vec::with_capacity(self.shape[1]);
+      unsafe { ipiv_buff.set_len(self.shape[1]); }
+      let ipiv = ipiv_buff.as_mut_ptr();
+      unsafe { T::gesv
+        (
+          &n,
+          &nrhs,
+          self.ptr,
+          &lda,
+          ipiv,
+          rhs.ptr,
+          &ldb,
+          &mut info,
+        );
       }
+      if info != 0 { return Err(LapackError::ErrorGESV(info).into()); }
+      Ok(())
     }
-  };
-}
 
-impl_matmul!(sgemm_, f32, 1., 0.);
-impl_matmul!(dgemm_, f64, 1., 0.);
-impl_matmul!(cgemm_, Complex32, Complex::new(1., 0.), Complex::new(0., 0.));
-impl_matmul!(zgemm_, Complex64, Complex::new(1., 0.), Complex::new(0., 0.));
+  /// This method performs computation of the SVD of self matrix.
+  /// The result is written in u, lmbd and vdag arrays.
+  /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+  /// as for raw pointers.
+  pub unsafe fn svd(
+    self,
+    u: Self,
+    lmbd: NDArray<*mut T::Real, 1>,
+    vdag: Self,
+  ) -> NDArrayResult<()>
+  {
+    if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+    if u.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if u.strides[1] < u.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+    if vdag.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if vdag.strides[1] < vdag.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+    if lmbd.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    let jobu = 'S' as c_char;
+    let jobvt = 'S' as c_char;
+    let m = self.shape[0] as c_int;
+    let n = self.shape[1] as c_int;
+    let lda = self.strides[1] as c_int;
+    let ldu = u.strides[1] as c_int;
+    let ldvt = vdag.strides[1] as c_int;
+    let min_dim = std::cmp::min(n, m);
+    if lmbd.shape[0] as c_int != min_dim { return Err(NDArrayError::IncorrectShape(Box::new(lmbd.shape), Box::new([min_dim as usize]))); }
+    if (u.shape[0] as c_int != m) || (u.shape[1] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape(Box::new(u.shape), Box::new([m as usize, min_dim as usize]))); }
+    if (vdag.shape[1] as c_int != n) || (vdag.shape[0] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape(Box::new(vdag.shape), Box::new([min_dim as usize, n as usize]))); }
+    let lwork = -1  as c_int;
+    let mut work = T::zero();
+    let mut rwork = Vec::with_capacity(5 * min_dim as usize);
+    unsafe { rwork.set_len(5 * min_dim as usize); }
+    let mut info = 0;
+    // worksapce query
+    unsafe { T::gesvd(
+      &jobu,
+      &jobvt,
+      &m,
+      &n,
+      self.ptr,
+      &lda,
+      lmbd.ptr,
+      u.ptr,
+      &ldu,
+      vdag.ptr,
+      &ldvt,
+      &mut work,
+      &lwork,
+      rwork.as_mut_ptr(),
+      &mut info) }
+    let lwork: c_int = ToPrimitive::to_i32(&work.re()).unwrap() as c_int;
+    let mut work: Vec<T> = Vec::with_capacity(lwork as usize);
+    unsafe { T::gesvd(
+      &jobu,
+      &jobvt,
+      &m,
+      &n,
+      self.ptr,
+      &lda,
+      lmbd.ptr,
+      u.ptr,
+      &ldu,
+      vdag.ptr,
+      &ldvt,
+      work.as_mut_ptr(),
+      &lwork,
+      rwork.as_mut_ptr(),
+      &mut info) }
+    if info != 0 { return Err(LapackError::ErrorGESVD(info).into()); }
+    Ok(())
+  }
 
-macro_rules! impl_solve {
-  ($fn_name:ident, $type_name:ident) => {
-    impl NDArray<*mut $type_name, 2>
-    {
-      /// This method solves a batch of systems of linear equations,
-      /// i.e. AX = B, where B is rhs, A is self. The solution X is written
-      /// to the rhs array. The array self is destroyed after a call of the method.
-      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
-      /// as for raw pointers.
-      pub unsafe fn solve(
-        self,
-        rhs: NDArray<*mut $type_name, 2>,
-      ) -> NDArrayResult<()>
-        {
-          if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-          if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-          if rhs.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-          if rhs.strides[1] < rhs.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-          if self.shape[1] != self.shape[0] { return Err(NDArrayError::SquareMatrixRequired(self.shape[0], self.shape[1])); }
-          let n = self.shape[1] as c_int;
-          if rhs.shape[0] as c_int != n { return Err(NDArrayError::IncorrectShape(Box::new(rhs.shape), Box::new([n as usize, rhs.shape[1]]))); }
-          let nrhs = rhs.shape[1] as c_int;
-          let lda = self.strides[1] as c_int;
-          let ldb = rhs.strides[1] as c_int;
-          let mut info: c_int = 0;
-          let mut ipiv_buff = Vec::with_capacity(self.shape[1]);
-          unsafe { ipiv_buff.set_len(self.shape[1]); }
-          let ipiv = ipiv_buff.as_mut_ptr();
-          unsafe { $fn_name
-            (
-              &n,
-              &nrhs,
-              self.ptr,
-              &lda,
-              ipiv,
-              rhs.ptr,
-              &ldb,
-              &mut info,
-            );
-          }
-          if info != 0 { return Err(LapackError::ErrorGESV(info).into()); }
-          Ok(())
-        }
+  unsafe fn householder_(&mut self, tau: *mut T) -> NDArrayResult<()> {
+    let m = self.shape[0] as c_int;
+    let n = self.shape[1] as c_int;
+    let lda = self.strides[1] as c_int;
+    let mut work = T::zero();
+    let lwork = -1 as c_int;
+    let mut info: c_int = 0;
+    T::geqrf(
+      &m,
+      &n,
+      self.ptr,
+      &lda,
+      tau,
+      &mut work,
+      &lwork,
+      &mut info,
+    );
+    let lwork: c_int = ToPrimitive::to_i32(&work.re()).unwrap() as c_int;
+    let mut work_buff: Vec<T> = Vec::with_capacity(lwork as usize);
+    unsafe { work_buff.set_len(lwork as usize); }
+    let work = work_buff.as_mut_ptr();
+    T::geqrf(
+      &m,
+      &n,
+      self.ptr,
+      &lda,
+      tau,
+      work,
+      &lwork,
+      &mut info,
+    );
+    if info != 0 { return Err(LapackError::ErrorGEQRF(info).into()); }
+    Ok(())
+  }
+
+  unsafe fn householder_to_q_(self, tau: *mut T) -> NDArrayResult<()> {
+    let m = self.shape[0] as c_int;
+    let n = self.shape[1] as c_int;
+    let k = std::cmp::min(m, n);
+    let lda = self.strides[1] as c_int;
+    let mut work = T::zero();
+    let lwork = -1 as c_int;
+    let mut info: c_int = 0;
+    T::ungqr(
+      &m,
+      &n,
+      &k,
+      self.ptr,
+      &lda,
+      tau,
+      &mut work,
+      &lwork,
+      &mut info,
+    );
+    let lwork: c_int = ToPrimitive::to_i32(&work.re()).unwrap() as c_int;
+    let mut work_buff: Vec<T> = Vec::with_capacity(lwork as usize);
+    unsafe { work_buff.set_len(lwork as usize); }
+    let work = work_buff.as_mut_ptr();
+    T::ungqr(
+      &m,
+      &n,
+      &k,
+      self.ptr,
+      &lda,
+      tau,
+      work,
+      &lwork,
+      &mut info,
+    );
+    if info != 0 { return Err(LapackError::ErrorORGQR(info).into()); }
+    Ok(())
+  }
+
+  /// This method performes QR deomposition of a self matrix of size m x n.
+  /// A matrix other is an auxiliary matrix of size min(m, n) x min(m, n).
+  /// If m > n the resultin Q matrix is written to self array and R matrix is
+  /// written to other array. Otherwise, Q is written to other array, R is
+  /// written to self array.
+  /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+  /// as for raw pointers.
+  pub unsafe fn qr(
+    mut self,
+    other: Self,
+  ) -> NDArrayResult<()>
+  {
+    let m = self.shape[0];
+    let n = self.shape[1];
+    let min_dim = std::cmp::min(n, m);
+    if other.shape != [min_dim, min_dim] { return Err(NDArrayError::SquareMatrixRequired(other.shape[0], other.shape[1])); }
+    let mut tau = Vec::with_capacity(min_dim);
+    unsafe { tau.set_len(min_dim); }
+    unsafe { self.householder_(tau.as_mut_ptr())?; }
+    unsafe { triangular_split(self, other); }
+    if m > n {
+      unsafe { self.householder_to_q_(tau.as_mut_ptr())?; }
+    } else {
+      unsafe { other.householder_to_q_(tau.as_mut_ptr())?; }
     }
+    Ok(())
+  }
+
+  /// This method performes RQ deomposition of a self matrix of size m x n.
+  /// A matrix other is an auxiliary matrix of size min(m, n) x min(m, n).
+  /// If m < n the resultin Q matrix is written to self array and R matrix is
+  /// written to other array. Otherwise, Q is written to other array, R is
+  /// written to self array.
+  /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+  /// as for raw pointers.
+  pub unsafe fn rq(
+    self,
+    other: Self,
+  ) -> NDArrayResult<()>
+  {
+    // TODO: to avoid extra allocations and copying use dedicated routines for rq decomposition
+    let (mut _self_transposed_buff, self_transposed_arr) = self.transpose([1, 0])?.gen_f_array();
+    let (mut _other_transposed_buff, other_transposed_arr) = other.transpose([1, 0])?.gen_f_array();
+    self_transposed_arr.qr(other_transposed_arr)?;
+    self_transposed_arr.transpose([1, 0])?.write_to(self)?;
+    other_transposed_arr.transpose([1, 0])?.write_to(other)?;
+    Ok(())
+  }
+
+  unsafe fn rank1_update(
+    self,
+    col: impl Into<NDArray<*const T, 2>>,
+    row: impl Into<NDArray<*const T, 2>>,
+    alpha: T,
+  ) -> NDArrayResult<()>
+  {
+    let col = col.into();
+    let row = row.into();
+    if col.shape[1] != 1 { panic!("col matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [self.shape[0], 1]) }
+    if row.shape[0] != 1 { panic!("row matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [1, self.shape[1]]) }
+    if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+    let m = self.shape[0] as c_int;
+    let n = self.shape[1] as c_int;
+    if col.shape[0] != m as usize { panic!("col matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [self.shape[0], 1]) }
+    if row.shape[1] != n as usize { panic!("row matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [1, self.shape[1]]) }
+    let incx = col.strides[0] as c_int;
+    let incy = row.strides[1] as c_int;
+    let lda = self.strides[1] as c_int;
+    T::ger(&m, &n, &alpha, col.ptr, &incx, row.ptr, &incy, self.ptr, &lda);
+    Ok(())
+  }
+
+  unsafe fn maxvol_preprocess(self) -> NDArrayResult<Vec<usize>> {
+    let mut ipiv = Vec::with_capacity(self.shape[1]);
+    ipiv.set_len(self.shape[1]);
+    let m = self.shape[0] as c_int;
+    let n = self.shape[1] as c_int;
+    let lda = self.strides[1] as c_int;
+    let mut info: c_int = 0;
+    T::getrf(&m, &n, self.ptr, &lda, ipiv.as_mut_ptr(), &mut info);
+    let (a, b) = self.split_across_axis(0, self.shape[1])?;
+    let side = 'R' as c_char;
+    let uplo = 'L' as c_char;
+    let transa = 'N' as c_char;
+    let diag = 'U' as c_char;
+    let m = b.shape[0] as c_int;
+    let n = b.shape[1] as c_int;
+    let alpha = T::one();
+    let lda = a.strides[1] as c_int;
+    let ldb = b.strides[1] as c_int;
+    T::trsm(&side, &uplo, &transa, &diag, &m, &n, &alpha, a.ptr, &lda, b.ptr, &ldb);
+    Ok(ipiv.into_iter().map(|x| x as usize).collect())
+  }
+
+  /// This method runs Maxvol algorithm for a matrix self of size m x n, where m >= n.
+  /// It returns the order of rows that corrseponds to the upper most part of the matrix
+  /// to be a dominant submatrix with accuracy delta. The self matrix is rewritten by the
+  /// matrix that has reshaffeled rows according to the obtained rows order and
+  /// multiplied by the inverse dominant part from the right.
+  /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
+  /// as for raw pointers.
+  pub unsafe fn maxvol(self, delta: T::Real) -> NDArrayResult<Vec<usize>>
+  {
+    let m = self.shape[0];
+    let n = self.shape[1];
+    if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if self.strides[1] < m { return Err(NDArrayError::MutableElementsOverlapping); }
+    if m < n { return Err(NDArrayError::MaxvolInputSizeMismatch(m, n)); }
+    let mut order: Vec<usize> = (0..m).collect();
+    let mut x_buff: Vec<T> = Vec::with_capacity(m - n);
+    unsafe { x_buff.set_len(m - n); }
+    let x = NDArray::from_mut_slice(&mut x_buff, [m - n, 1])?;
+    let mut y_buff: Vec<T> = Vec::with_capacity(n);
+    unsafe { y_buff.set_len(n); }
+    let y = NDArray::from_mut_slice(&mut y_buff, [1, n])?;
+    let ipiv = self.maxvol_preprocess()?;
+    for (i, j) in ipiv.into_iter().enumerate() {
+      order.swap(i, j-1);
+    }
+    let (a, b) = self.split_across_axis(0, n)?;
+    unsafe { (0..(n * n)).into_iter().zip(a.into_f_iter()).for_each(|(i, x)| {
+      if i % (n + 1) == 0 { *x.0 = T::one() } else { *x.0 = T::zero() }
+    }) };
+    let mut val;
+    let mut indices;
+    loop {
+      (val, indices) = b.argmax();
+      let row_num = unsafe { *indices.get_unchecked(0) };
+      let col_num = unsafe { *indices.get_unchecked(1) };
+      if val.abs() < delta + T::Real::one() { break; }
+      let bij = *b.at(indices)?;
+      let col = b.subarray([0..(m - n), col_num..(col_num + 1)])?;
+      let row = b.subarray([row_num..(row_num + 1), 0..n])?;
+      col.write_to(x)?;
+      row.write_to(y)?;
+      let elem = &mut *x.at([row_num, 0])?;
+      *elem = *elem + T::one();
+      let elem = &mut *y.at([0, col_num])?;
+      *elem = *elem - T::one();
+      b.rank1_update(x, y, -T::one() / bij)?;
+      order.swap(col_num, row_num + n);
+    }
+    Ok(order)
   }
 }
-
-impl_solve!(sgesv_, f32      );
-impl_solve!(dgesv_, f64      );
-impl_solve!(cgesv_, Complex32);
-impl_solve!(zgesv_, Complex64);
-
-macro_rules! impl_svd {
-  ($fn_name:ident, $type_name:ident, $complex_type_name:ident, $complex_zero:expr, $complex_to_real_fn:expr) => {
-    impl NDArray<*mut $complex_type_name, 2> {
-      /// This method performs computation of the SVD of self matrix.
-      /// The result is written in u, lmbd and vdag arrays.
-      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
-      /// as for raw pointers.
-      pub unsafe fn svd(
-        self,
-        u: NDArray<*mut $complex_type_name, 2>,
-        lmbd: NDArray<*mut $type_name, 1>,
-        vdag: NDArray<*mut $complex_type_name, 2>,
-      ) -> NDArrayResult<()>
-      {
-        if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-        if u.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        if u.strides[1] < u.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-        if vdag.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        if vdag.strides[1] < vdag.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-        if lmbd.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        let jobu = 'S' as c_char;
-        let jobvt = 'S' as c_char;
-        let m = self.shape[0] as c_int;
-        let n = self.shape[1] as c_int;
-        let lda = self.strides[1] as c_int;
-        let ldu = u.strides[1] as c_int;
-        let ldvt = vdag.strides[1] as c_int;
-        let min_dim = std::cmp::min(n, m);
-        if lmbd.shape[0] as c_int != min_dim { return Err(NDArrayError::IncorrectShape(Box::new(lmbd.shape), Box::new([min_dim as usize]))); }
-        if (u.shape[0] as c_int != m) || (u.shape[1] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape(Box::new(u.shape), Box::new([m as usize, min_dim as usize]))); }
-        if (vdag.shape[1] as c_int != n) || (vdag.shape[0] as c_int != min_dim) { return Err(NDArrayError::IncorrectShape(Box::new(vdag.shape), Box::new([min_dim as usize, n as usize]))); }
-        let lwork = -1  as c_int;
-        let mut work = $complex_zero;
-        let mut rwork = Vec::with_capacity(5 * min_dim as usize);
-        unsafe { rwork.set_len(5 * min_dim as usize); }
-        let mut info = 0;
-        // worksapce query
-        unsafe { $fn_name(
-          &jobu,
-          &jobvt,
-          &m,
-          &n,
-          self.ptr,
-          &lda,
-          lmbd.ptr,
-          u.ptr,
-          &ldu,
-          vdag.ptr,
-          &ldvt,
-          &mut work,
-          &lwork,
-          rwork.as_mut_ptr(),
-          &mut info) }
-        let lwork = $complex_to_real_fn(work) as c_int;
-        let mut work: Vec<$complex_type_name> = Vec::with_capacity(lwork as usize);
-        unsafe { $fn_name(
-          &jobu,
-          &jobvt,
-          &m,
-          &n,
-          self.ptr,
-          &lda,
-          lmbd.ptr,
-          u.ptr,
-          &ldu,
-          vdag.ptr,
-          &ldvt,
-          work.as_mut_ptr(),
-          &lwork,
-          rwork.as_mut_ptr(),
-          &mut info) }
-        if info != 0 { return Err(LapackError::ErrorGESVD(info).into()); }
-        Ok(())
-      }
-    }
-  };
-}
-
-impl_svd!(sgesvd_, f32, f32      , 0.                    , |x| x              );
-impl_svd!(dgesvd_, f64, f64      , 0.                    , |x| x              );
-impl_svd!(cgesvd_, f32, Complex32, Complex32::new(0., 0.), |x: Complex32| x.re);
-impl_svd!(zgesvd_, f64, Complex64, Complex64::new(0., 0.), |x: Complex64| x.re);
-
-macro_rules! impl_householder {
-  ($fn_name:ident, $type_name:ident, $complex_zero:expr, $complex_to_real_fn:expr) => {
-    impl NDArray<*mut $type_name, 2> {
-      unsafe fn householder_(&mut self, tau: *mut $type_name) -> NDArrayResult<()> {
-        let m = self.shape[0] as c_int;
-        let n = self.shape[1] as c_int;
-        let lda = self.strides[1] as c_int;
-        let mut work = $complex_zero;
-        let lwork = -1 as c_int;
-        let mut info: c_int = 0;
-        $fn_name(
-          &m,
-          &n,
-          self.ptr,
-          &lda,
-          tau,
-          &mut work,
-          &lwork,
-          &mut info,
-        );
-        let lwork = $complex_to_real_fn(work) as c_int;
-        let mut work_buff: Vec<$type_name> = Vec::with_capacity(lwork as usize);
-        unsafe { work_buff.set_len(lwork as usize); }
-        let work = work_buff.as_mut_ptr();
-        $fn_name(
-          &m,
-          &n,
-          self.ptr,
-          &lda,
-          tau,
-          work,
-          &lwork,
-          &mut info,
-        );
-        if info != 0 { return Err(LapackError::ErrorGEQRF(info).into()); }
-        Ok(())
-      }
-    }
-  };
-}
-
-impl_householder!(sgeqrf_, f32,       0.,                   |x| x              );
-impl_householder!(dgeqrf_, f64,       0.,                   |x| x              );
-impl_householder!(cgeqrf_, Complex32, Complex::new(0., 0.), |x: Complex32| x.re);
-impl_householder!(zgeqrf_, Complex64, Complex::new(0., 0.), |x: Complex64| x.re);
-
-macro_rules! impl_householder_to_q {
-  ($fn_name:ident, $type_name:ident, $complex_zero:expr, $complex_to_real_fn:expr) => {
-    impl NDArray<*mut $type_name, 2> {
-      unsafe fn householder_to_q_(self, tau: *mut $type_name) -> NDArrayResult<()> {
-        let m = self.shape[0] as c_int;
-        let n = self.shape[1] as c_int;
-        let k = std::cmp::min(m, n);
-        let lda = self.strides[1] as c_int;
-        let mut work = $complex_zero;
-        let lwork = -1 as c_int;
-        let mut info: c_int = 0;
-        $fn_name(
-          &m,
-          &n,
-          &k,
-          self.ptr,
-          &lda,
-          tau,
-          &mut work,
-          &lwork,
-          &mut info,
-        );
-        let lwork = $complex_to_real_fn(work) as c_int;
-        let mut work_buff: Vec<$type_name> = Vec::with_capacity(lwork as usize);
-        unsafe { work_buff.set_len(lwork as usize); }
-        let work = work_buff.as_mut_ptr();
-        $fn_name(
-          &m,
-          &n,
-          &k,
-          self.ptr,
-          &lda,
-          tau,
-          work,
-          &lwork,
-          &mut info,
-        );
-        if info != 0 { return Err(LapackError::ErrorORGQR(info).into()); }
-        Ok(())
-      }
-    } 
-  };
-}
-
-impl_householder_to_q!(sorgqr_, f32,       0.,                     |x| x              );
-impl_householder_to_q!(dorgqr_, f64,       0.,                     |x| x              );
-impl_householder_to_q!(cungqr_, Complex32, Complex32::new(0., 0.), |x: Complex32| x.re);
-impl_householder_to_q!(zungqr_, Complex64, Complex64::new(0., 0.), |x: Complex64| x.re);
-
-macro_rules! impl_qr {
-  ($type_name:ident) => {
-    impl NDArray<*mut $type_name, 2> {
-      /// This method performes QR deomposition of a self matrix of size m x n.
-      /// A matrix other is an auxiliary matrix of size min(m, n) x min(m, n).
-      /// If m > n the resultin Q matrix is written to self array and R matrix is
-      /// written to other array. Otherwise, Q is written to other array, R is
-      /// written to self array.
-      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
-      /// as for raw pointers.
-      pub unsafe fn qr(
-        mut self,
-        other: Self,
-      ) -> NDArrayResult<()>
-      {
-        let m = self.shape[0];
-        let n = self.shape[1];
-        let min_dim = std::cmp::min(n, m);
-        if other.shape != [min_dim, min_dim] { return Err(NDArrayError::SquareMatrixRequired(other.shape[0], other.shape[1])); }
-        let mut tau = Vec::with_capacity(min_dim);
-        unsafe { tau.set_len(min_dim); }
-        unsafe { self.householder_(tau.as_mut_ptr())?; }
-        unsafe { triangular_split(self, other); }
-        if m > n {
-          unsafe { self.householder_to_q_(tau.as_mut_ptr())?; }
-        } else {
-          unsafe { other.householder_to_q_(tau.as_mut_ptr())?; }
-        }
-        Ok(())
-      }
-    }
-  };
-}
-
-impl_qr!(f32      );
-impl_qr!(f64      );
-impl_qr!(Complex32);
-impl_qr!(Complex64);
-
-macro_rules! impl_rq {
-  ($type_name:ident) => {
-    impl NDArray<*mut $type_name, 2> {
-      /// This method performes RQ deomposition of a self matrix of size m x n.
-      /// A matrix other is an auxiliary matrix of size min(m, n) x min(m, n).
-      /// If m < n the resultin Q matrix is written to self array and R matrix is
-      /// written to other array. Otherwise, Q is written to other array, R is
-      /// written to self array.
-      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
-      /// as for raw pointers.
-      pub unsafe fn rq(
-        self,
-        other: Self,
-      ) -> NDArrayResult<()>
-      {
-        // TODO: to avoid extra allocations and copying use dedicated routines for rq decomposition
-        let (mut _self_transposed_buff, self_transposed_arr) = self.transpose([1, 0])?.gen_f_array();
-        let (mut _other_transposed_buff, other_transposed_arr) = other.transpose([1, 0])?.gen_f_array();
-        self_transposed_arr.qr(other_transposed_arr)?;
-        self_transposed_arr.transpose([1, 0])?.write_to(self)?;
-        other_transposed_arr.transpose([1, 0])?.write_to(other)?;
-        Ok(())
-      }
-    }
-  };
-}
-
-impl_rq!(f32      );
-impl_rq!(f64      );
-impl_rq!(Complex32);
-impl_rq!(Complex64);
-
-macro_rules! impl_rank1_update {
-  ($fn_name:ident, $type_name:ident) => {
-    impl NDArray<*mut $type_name, 2> {
-      unsafe fn rank1_update(
-        self,
-        col: impl Into<NDArray<*const $type_name, 2>>,
-        row: impl Into<NDArray<*const $type_name, 2>>,
-        alpha: $type_name,
-      ) -> NDArrayResult<()>
-      {
-        let col = col.into();
-        let row = row.into();
-        if col.shape[1] != 1 { panic!("col matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [self.shape[0], 1]) }
-        if row.shape[0] != 1 { panic!("row matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [1, self.shape[1]]) }
-        if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
-        let m = self.shape[0] as c_int;
-        let n = self.shape[1] as c_int;
-        if col.shape[0] != m as usize { panic!("col matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [self.shape[0], 1]) }
-        if row.shape[1] != n as usize { panic!("row matrix in the rank1_update method has incorrect shape: given: {:?}, required: {:?}.", col.shape, [1, self.shape[1]]) }
-        let incx = col.strides[0] as c_int;
-        let incy = row.strides[1] as c_int;
-        let lda = self.strides[1] as c_int;
-        $fn_name(&m, &n, &alpha, col.ptr, &incx, row.ptr, &incy, self.ptr, &lda);
-        Ok(())
-      }
-    }
-  };
-}
-
-impl_rank1_update!(sger_,  f32      );
-impl_rank1_update!(dger_,  f64      );
-impl_rank1_update!(cgeru_, Complex32);
-impl_rank1_update!(zgeru_, Complex64);
-
-macro_rules! impl_maxvol_preprocess {
-  ($getrf:ident, $trsm:ident, $complex_type_name:ty, $complex_one:expr) => {
-    impl NDArray<*mut $complex_type_name, 2> {
-      unsafe fn maxvol_preprocess(self) -> NDArrayResult<Vec<usize>> {
-        let mut ipiv = Vec::with_capacity(self.shape[1]);
-        ipiv.set_len(self.shape[1]);
-        let m = self.shape[0] as c_int;
-        let n = self.shape[1] as c_int;
-        let lda = self.strides[1] as c_int;
-        let mut info: c_int = 0;
-        $getrf(&m, &n, self.ptr, &lda, ipiv.as_mut_ptr(), &mut info);
-        let (a, b) = self.split_across_axis(0, self.shape[1])?;
-        let side = 'R' as c_char;
-        let uplo = 'L' as c_char;
-        let transa = 'N' as c_char;
-        let diag = 'U' as c_char;
-        let m = b.shape[0] as c_int;
-        let n = b.shape[1] as c_int;
-        let alpha = $complex_one;
-        let lda = a.strides[1] as c_int;
-        let ldb = b.strides[1] as c_int;
-        $trsm(&side, &uplo, &transa, &diag, &m, &n, &alpha, a.ptr, &lda, b.ptr, &ldb);
-        Ok(ipiv.into_iter().map(|x| x as usize).collect())
-      }
-    }
-  };
-}
-
-impl_maxvol_preprocess!(sgetrf_, strsm_, f32      , 1f32                  );
-impl_maxvol_preprocess!(dgetrf_, dtrsm_, f64      , 1f64                  );
-impl_maxvol_preprocess!(cgetrf_, ctrsm_, Complex32, Complex32::new(1., 0.));
-impl_maxvol_preprocess!(zgetrf_, ztrsm_, Complex64, Complex64::new(1., 0.));
-
-macro_rules! impl_maxvol {
-  ($complex_type_name:ident, $type_name:ident, $complex_one:expr, $complex_zero:expr) => {
-    impl NDArray<*mut $complex_type_name, 2> {
-      /// This method runs Maxvol algorithm for a matrix self of size m x n, where m >= n.
-      /// It returns the order of rows that corrseponds to the upper most part of the matrix
-      /// to be a dominant submatrix with accuracy delta. The self matrix is rewritten by the
-      /// matrix that has reshaffeled rows according to the obtained rows order and
-      /// multiplied by the inverse dominant part from the right.
-      /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
-      /// as for raw pointers.
-      pub unsafe fn maxvol(self, delta: $type_name) -> NDArrayResult<Vec<usize>> {
-        let m = self.shape[0];
-        let n = self.shape[1];
-        if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
-        if self.strides[1] < m { return Err(NDArrayError::MutableElementsOverlapping); }
-        if m < n { return Err(NDArrayError::MaxvolInputSizeMismatch(m, n)); }
-        let mut order: Vec<usize> = (0..m).collect();
-        let mut x_buff: Vec<$complex_type_name> = Vec::with_capacity(m - n);
-        unsafe { x_buff.set_len(m - n); }
-        let x = NDArray::from_mut_slice(&mut x_buff, [m - n, 1])?;
-        let mut y_buff: Vec<$complex_type_name> = Vec::with_capacity(n);
-        unsafe { y_buff.set_len(n); }
-        let y = NDArray::from_mut_slice(&mut y_buff, [1, n])?;
-        let ipiv = self.maxvol_preprocess()?;
-        for (i, j) in ipiv.into_iter().enumerate() {
-          order.swap(i, j-1);
-        }
-        let (a, b) = self.split_across_axis(0, n)?;
-        unsafe { (0..(n * n)).into_iter().zip(a.into_f_iter()).for_each(|(i, x)| {
-          if i % (n + 1) == 0 { *x.0 = $complex_one } else { *x.0 = $complex_zero }
-        }) };
-        let mut val;
-        let mut indices;
-        loop {
-          (val, indices) = b.argmax();
-          let row_num = unsafe { *indices.get_unchecked(0) };
-          let col_num = unsafe { *indices.get_unchecked(1) };
-          if val.abs() < delta + 1. { break; }
-          let bij = *b.at(indices)?;
-          let col = b.subarray([0..(m - n), col_num..(col_num + 1)])?;
-          let row = b.subarray([row_num..(row_num + 1), 0..n])?;
-          col.write_to(x)?;
-          row.write_to(y)?;
-          *x.at([row_num, 0])? += $complex_one;
-          *y.at([0, col_num])? -= $complex_one;
-          b.rank1_update(x, y, -$complex_one / bij)?;
-          order.swap(col_num, row_num + n);
-        }
-        Ok(order)
-      }
-    }
-  };
-}
-
-impl_maxvol!(f32,       f32, 1.                    ,                     0.);
-impl_maxvol!(f64,       f64, 1.                    ,                     0.);
-impl_maxvol!(Complex32, f32, Complex32::new(1., 0.), Complex32::new(0., 0.));
-impl_maxvol!(Complex64, f64, Complex64::new(1., 0.), Complex64::new(0., 0.));
 
 // ---------------------------------------------------------------------- //
 
 #[cfg(test)]
 mod tests {
-use num_complex::{
+  use crate::init_utils::BufferGenerator;
+  use num_complex::{
     Complex64,
     Complex32,
-    ComplexFloat,
   };
-  use crate::NDArray;
-  use crate::init_utils::{
-    random_normal_f32,
-    random_normal_f64,
-    random_normal_c32,
-    random_normal_c64,
-    eye_f32,
-    eye_f64,
-    eye_c32,
-    eye_c64,
-    uninit_buff_f32,
-    uninit_buff_f64,
+  use num_traits::One;
+  use crate::{
+    NDArray,
+    LinalgComplex,
+    LinalgReal,
   };
   use ndarray::Array;
   use ndarray_einsum_beta::einsum;
-  //use rayon::iter::ParallelIterator;
 
-  macro_rules! test_matmul_inplace {
-      ($sizes:expr, $einsum_str:expr, $is_a_transposed:expr, $is_b_transposed:expr, $type_name:ident, $gen_fn:ident) => {
-        let (m, k, n) = $sizes;
-        let buff_a = $gen_fn(k * m);
-        let buff_a = Array::from_shape_vec(if $is_a_transposed { [m, k] } else { [k, m] }, buff_a).unwrap();
-        let buff_b = $gen_fn(n * k);
-        let buff_b = Array::from_shape_vec(if $is_b_transposed { [k, n] } else { [n, k] }, buff_b).unwrap();
-        let einsum_c = einsum($einsum_str, &[&buff_b, &buff_a]).unwrap();
-        let einsum_c = einsum_c.iter().map(|x| *x).collect::<Vec<_>>();
-        let einsum_c = NDArray::from_slice(&einsum_c, [m, n]).unwrap();
+  #[inline]
+  unsafe fn _test_matmul_inplace<T>
+  (
+    size: (usize, usize, usize),
+    einsum_str: &str,
+    is_a_transposed: bool,
+    is_b_transposed: bool,
+    acc: T::Real,
+  )
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (m, k, n) = size;
+    let buff_a = T::random_normal(k * m);
+    let buff_a = Array::from_shape_vec(if is_a_transposed { [m, k] } else { [k, m] }, buff_a).unwrap();
+    let buff_b = T::random_normal(n * k);
+    let buff_b = Array::from_shape_vec(if is_b_transposed { [k, n] } else { [n, k] }, buff_b).unwrap();
+    let einsum_c = einsum(einsum_str, &[&buff_b, &buff_a]).unwrap();
+    let einsum_c = einsum_c.iter().map(|x| *x).collect::<Vec<_>>();
+    let einsum_c = NDArray::from_slice(&einsum_c, [m, n]).unwrap();
 
-        let a = NDArray::from_slice(buff_a.as_slice_memory_order().unwrap(), [k, m]).unwrap();
-        let a = if $is_a_transposed { a.transpose([1, 0]).unwrap() } else { a.reshape([m, k]).unwrap() };
-        let b = NDArray::from_slice(buff_b.as_slice_memory_order().unwrap(), [n, k]).unwrap();
-        let b = if $is_b_transposed { b.transpose([1, 0]).unwrap() } else { b.reshape([k, n]).unwrap() };
-        let mut buff_c: Vec<$type_name> = vec![Default::default(); m * n];
-        let c = NDArray::from_mut_slice(buff_c.as_mut_slice(), [m, n]).unwrap();
-        c.matmul_inplace(a, b).unwrap();
-        c.sub_inpl(einsum_c).unwrap();
-        assert!(c.norm_n_pow_n(2) < 1e-5);
-      };
+    let a = NDArray::from_slice(buff_a.as_slice_memory_order().unwrap(), [k, m]).unwrap();
+    let a = if is_a_transposed { a.transpose([1, 0]).unwrap() } else { a.reshape([m, k]).unwrap() };
+    let b = NDArray::from_slice(buff_b.as_slice_memory_order().unwrap(), [n, k]).unwrap();
+    let b = if is_b_transposed { b.transpose([1, 0]).unwrap() } else { b.reshape([k, n]).unwrap() };
+    let mut buff_c: Vec<T> = vec![T::zero(); m * n];
+    let c = NDArray::from_mut_slice(buff_c.as_mut_slice(), [m, n]).unwrap();
+    c.matmul_inplace(a, b).unwrap();
+    c.sub_inpl(einsum_c).unwrap();
+    assert!(c.norm_n_pow_n(2).abs() < acc);
   }
 
   #[test]
   fn test_matmul_inplace() {
     unsafe {
-      test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, f32,       random_normal_f32 );
-      test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, f64,       random_normal_f64 );
-      test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, Complex32, random_normal_c32 );
-      test_matmul_inplace!((4, 6, 5), "ik,kj->ij", false, false, Complex64, random_normal_c64);
-      test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  f32,       random_normal_f32 );
-      test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  f64,       random_normal_f64 );
-      test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  Complex32, random_normal_c32 );
-      test_matmul_inplace!((4, 6, 5), "ki,kj->ij", false, true,  Complex64, random_normal_c64);
-      test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, f32,       random_normal_f32 );
-      test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, f64,       random_normal_f64 );
-      test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, Complex32, random_normal_c32 );
-      test_matmul_inplace!((4, 6, 5), "ik,jk->ij", true,  false, Complex64, random_normal_c64);
-      test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  f32,       random_normal_f32 );
-      test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  f64,       random_normal_f64 );
-      test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  Complex32, random_normal_c32 );
-      test_matmul_inplace!((4, 6, 5), "ki,jk->ij", true,  true,  Complex64, random_normal_c64);
+      _test_matmul_inplace::<f32>(      (4, 6, 5), "ik,kj->ij", false, false, 1e-5 );
+      _test_matmul_inplace::<f64>(      (4, 6, 5), "ik,kj->ij", false, false, 1e-10);
+      _test_matmul_inplace::<Complex32>((4, 6, 5), "ik,kj->ij", false, false, 1e-5 );
+      _test_matmul_inplace::<Complex64>((4, 6, 5), "ik,kj->ij", false, false, 1e-10);
+      _test_matmul_inplace::<f32>(      (4, 6, 5), "ik,jk->ij", true , false, 1e-5 );
+      _test_matmul_inplace::<f64>(      (4, 6, 5), "ik,jk->ij", true , false, 1e-10);
+      _test_matmul_inplace::<Complex32>((4, 6, 5), "ik,jk->ij", true , false, 1e-5 );
+      _test_matmul_inplace::<Complex64>((4, 6, 5), "ik,jk->ij", true , false, 1e-10);
+      _test_matmul_inplace::<f32>(      (4, 6, 5), "ki,kj->ij", false, true , 1e-5 );
+      _test_matmul_inplace::<f64>(      (4, 6, 5), "ki,kj->ij", false, true , 1e-10);
+      _test_matmul_inplace::<Complex32>((4, 6, 5), "ki,kj->ij", false, true , 1e-5 );
+      _test_matmul_inplace::<Complex64>((4, 6, 5), "ki,kj->ij", false, true , 1e-10);
+      _test_matmul_inplace::<f32>(      (4, 6, 5), "ki,jk->ij", true , true , 1e-5 );
+      _test_matmul_inplace::<f64>(      (4, 6, 5), "ki,jk->ij", true , true , 1e-10);
+      _test_matmul_inplace::<Complex32>((4, 6, 5), "ki,jk->ij", true , true , 1e-5 );
+      _test_matmul_inplace::<Complex64>((4, 6, 5), "ki,jk->ij", true , true , 1e-10);
     }
   }
 
-  macro_rules! test_solve {
-    ($sizes:expr, $type_name:ident, $gen_fn:ident) => {
-      let (n, nrhs) = $sizes;
-      let mut buff_a = $gen_fn(n * n);
-      let a = NDArray::from_slice(buff_a.as_slice(), [n, n]).unwrap();
-      let buff_x = $gen_fn(n * nrhs);
-      let x = NDArray::from_slice(buff_x.as_slice(), [n, nrhs]).unwrap();
-      let mut buff_b = $gen_fn(n * nrhs);
-      let b = NDArray::from_mut_slice(buff_b.as_mut_slice(), [n, nrhs]).unwrap();
-      b.matmul_inplace(a, x).unwrap();
-      let a = NDArray::from_mut_slice(buff_a.as_mut_slice(), [n, n]).unwrap();
-      a.solve(b).unwrap();
-      let b = NDArray::from_mut_slice(buff_b.as_mut_slice(), [n, nrhs]).unwrap();
-      b.sub_inpl(x).unwrap();
-      assert!(b.norm_n_pow_n(2) < 1e-5);
-    };
+  #[inline]
+  unsafe fn _test_solve<T>(size: (usize, usize), acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (n, nrhs) = size;
+    let mut buff_a = T::random_normal(n * n);
+    let a = NDArray::from_slice(buff_a.as_slice(), [n, n]).unwrap();
+    let buff_x = T::random_normal(n * nrhs);
+    let x = NDArray::from_slice(buff_x.as_slice(), [n, nrhs]).unwrap();
+    let mut buff_b = T::random_normal(n * nrhs);
+    let b = NDArray::from_mut_slice(buff_b.as_mut_slice(), [n, nrhs]).unwrap();
+    b.matmul_inplace(a, x).unwrap();
+    let a = NDArray::from_mut_slice(buff_a.as_mut_slice(), [n, n]).unwrap();
+    a.solve(b).unwrap();
+    let b = NDArray::from_mut_slice(buff_b.as_mut_slice(), [n, nrhs]).unwrap();
+    b.sub_inpl(x).unwrap();
+    assert!(b.norm_n_pow_n(2).abs() < acc);
   }
 
   #[test]
-  fn test_inv() {
+  fn test_solv() {
     unsafe {
-      test_solve!((10, 15), f32,       random_normal_f32 );
-      test_solve!((10, 15), f64,       random_normal_f64 );
-      test_solve!((10, 15), Complex32, random_normal_c32 );
-      test_solve!((10, 15), Complex64, random_normal_c64);
+      _test_solve::<f32>(      (10, 15), 1e-5 );
+      _test_solve::<f64>(      (10, 15), 1e-10);
+      _test_solve::<Complex32>((10, 15), 1e-5 );
+      _test_solve::<Complex64>((10, 15), 1e-10);
     }
   }
 
-  macro_rules! test_svd {
-    ($sizes:expr, $gen_fn:ident, $lmbd_uninit_function:ident, $complex_init:expr) => {
-      let (m, n) = $sizes;
-      let min_dim = std::cmp::min(m, n);
-      let mut buff_a = $gen_fn(m * n);
-      let buff_a_copy = buff_a.clone();
-      let a = NDArray::from_mut_slice(buff_a.as_mut_slice(), [m, n]).unwrap();
-      let a_copy = NDArray::from_slice(buff_a_copy.as_slice(), [m, n]).unwrap();
-      let mut buff_u = $gen_fn(m * min_dim);
-      let u = NDArray::from_mut_slice(buff_u.as_mut_slice(), [m, min_dim]).unwrap();
-      let mut buff_vdag = $gen_fn(min_dim * n);
-      let vdag = NDArray::from_mut_slice(buff_vdag.as_mut_slice(), [min_dim, n]).unwrap();
-      let mut s_buff = $lmbd_uninit_function(min_dim);
-      let s = NDArray::from_mut_slice(&mut s_buff, [min_dim]).unwrap();
-      a.svd(u, s, vdag).unwrap();
-      // Here we check that s is non-negative
-      assert!(s_buff.iter().all(|x| *x >= 0. ));
-      // Here we check isometric property of u and v
-      let buff_vdag_copy: Vec<_> = buff_vdag.iter().map(|x| { x.conj() }).collect();
-      let buff_u_copy: Vec<_> = buff_u.iter().map(|x| { x.conj() }).collect();
-      let mut buff_v_vdag= vec![$complex_init(0., 0.); min_dim * min_dim];
-      let mut buff_udag_u= vec![$complex_init(0., 0.); min_dim * min_dim];
-      let v_copy = NDArray::from_slice(buff_vdag_copy.as_slice(), [min_dim, n]).unwrap();
-      let udag_copy = NDArray::from_slice(buff_u_copy.as_slice(), [m, min_dim]).unwrap();
-      let v_vdag = NDArray::from_mut_slice(buff_v_vdag.as_mut_slice(), [min_dim, min_dim]).unwrap();
-      let udag_u = NDArray::from_mut_slice(buff_udag_u.as_mut_slice(), [min_dim, min_dim]).unwrap();
-      let u = NDArray::from_slice(buff_u.as_slice(), [m, min_dim]).unwrap();
-      let vdag = NDArray::from_slice(buff_vdag.as_slice(), [min_dim, n]).unwrap();
-      v_vdag.matmul_inplace(vdag, v_copy.transpose([1, 0]).unwrap()).unwrap();
-      udag_u.matmul_inplace(udag_copy.transpose([1, 0]).unwrap(), u).unwrap();
-      let mut eye_buff = vec![$complex_init(0., 0.); min_dim * min_dim];
-      for i in 0..(min_dim) {
-        eye_buff[i * (min_dim + 1)] = $complex_init(1., 0.);
-      }
-      let eye = NDArray::from_slice(&eye_buff, [min_dim, min_dim]).unwrap();
-      v_vdag.sub_inpl(eye).unwrap();
-      udag_u.sub_inpl(eye).unwrap();
-      assert!(v_vdag.norm_n_pow_n(2) < 1e-5);
-      assert!(udag_u.norm_n_pow_n(2) < 1e-5);
-      // Here we check decomposition correctness
-      let mut result_buff = vec![$complex_init(0., 0.); m * n];
-      let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
-      let s_buff: Vec<_> = s_buff.into_iter().map(|x| $complex_init(x, 0.)).collect();
-      let s = NDArray::from_slice(&s_buff, [1, min_dim]).unwrap();
-      let lhs = NDArray::from_mut_slice(&mut buff_u, [m, min_dim]).unwrap();
-      let rhs = NDArray::from_slice(&buff_vdag, [min_dim, n]).unwrap();
-      lhs.mul_inpl(s).unwrap();
-      result.matmul_inplace(lhs, rhs).unwrap();
-      result.sub_inpl(a_copy).unwrap();
-      assert!(result.norm_n_pow_n(2) < 1e-5);
-    };
+  #[inline]
+  unsafe fn _test_svd<T>(size: (usize, usize), acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (m, n) = size;
+    let min_dim = std::cmp::min(m, n);
+    let mut buff_a = T::random_normal(m * n);
+    let buff_a_copy = buff_a.clone();
+    let a = NDArray::from_mut_slice(buff_a.as_mut_slice(), [m, n]).unwrap();
+    let a_copy = NDArray::from_slice(buff_a_copy.as_slice(), [m, n]).unwrap();
+    let mut buff_u = T::random_normal(m * min_dim);
+    let u = NDArray::from_mut_slice(buff_u.as_mut_slice(), [m, min_dim]).unwrap();
+    let mut buff_vdag = T::random_normal(min_dim * n);
+    let vdag = NDArray::from_mut_slice(buff_vdag.as_mut_slice(), [min_dim, n]).unwrap();
+    let mut s_buff: Vec<T::Real> = T::Real::uninit_buff(min_dim);
+    let s = NDArray::from_mut_slice(&mut s_buff, [min_dim]).unwrap();
+    a.svd(u, s, vdag).unwrap();
+    // Here we check that s is non-negative
+    assert!(s_buff.iter().all(|x| *x >= T::zero().re() ));
+    // Here we check isometric property of u and v
+    let buff_vdag_copy: Vec<_> = buff_vdag.iter().map(|x| { x.conj() }).collect();
+    let buff_u_copy: Vec<_> = buff_u.iter().map(|x| { x.conj() }).collect();
+    let mut buff_v_vdag= vec![T::zero(); min_dim * min_dim];
+    let mut buff_udag_u= vec![T::zero(); min_dim * min_dim];
+    let v_copy = NDArray::from_slice(buff_vdag_copy.as_slice(), [min_dim, n]).unwrap();
+    let udag_copy = NDArray::from_slice(buff_u_copy.as_slice(), [m, min_dim]).unwrap();
+    let v_vdag = NDArray::from_mut_slice(buff_v_vdag.as_mut_slice(), [min_dim, min_dim]).unwrap();
+    let udag_u = NDArray::from_mut_slice(buff_udag_u.as_mut_slice(), [min_dim, min_dim]).unwrap();
+    let u = NDArray::from_slice(buff_u.as_slice(), [m, min_dim]).unwrap();
+    let vdag = NDArray::from_slice(buff_vdag.as_slice(), [min_dim, n]).unwrap();
+    v_vdag.matmul_inplace(vdag, v_copy.transpose([1, 0]).unwrap()).unwrap();
+    udag_u.matmul_inplace(udag_copy.transpose([1, 0]).unwrap(), u).unwrap();
+    let mut eye_buff = vec![T::zero(); min_dim * min_dim];
+    for i in 0..(min_dim) {
+      eye_buff[i * (min_dim + 1)] = T::one();
+    }
+    let eye = NDArray::from_slice(&eye_buff, [min_dim, min_dim]).unwrap();
+    v_vdag.sub_inpl(eye).unwrap();
+    udag_u.sub_inpl(eye).unwrap();
+    assert!(v_vdag.norm_n_pow_n(2).abs() < acc);
+    assert!(udag_u.norm_n_pow_n(2).abs() < acc);
+    // Here we check decomposition correctness
+    let mut result_buff = vec![T::zero(); m * n];
+    let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
+    let s_buff: Vec<_> = s_buff.into_iter().map(|x| T::from(x).unwrap()).collect();
+    let s = NDArray::from_slice(&s_buff, [1, min_dim]).unwrap();
+    let lhs = NDArray::from_mut_slice(&mut buff_u, [m, min_dim]).unwrap();
+    let rhs = NDArray::from_slice(&buff_vdag, [min_dim, n]).unwrap();
+    lhs.mul_inpl(s).unwrap();
+    result.matmul_inplace(lhs, rhs).unwrap();
+    result.sub_inpl(a_copy).unwrap();
+    assert!(result.norm_n_pow_n(2).abs() < acc);
   }
 
   #[test]
   fn test_svd() {
     unsafe {
-      test_svd!((10, 15), random_normal_f32, uninit_buff_f32,  |x, _| x as f32            );
-      test_svd!((10, 15), random_normal_f64, uninit_buff_f64,  |x, _| x as f64            );
-      test_svd!((10, 15), random_normal_c32, uninit_buff_f32,  |x, y| Complex32::new(x, y));
-      test_svd!((10, 15), random_normal_c64, uninit_buff_f64,  |x, y| Complex64::new(x, y));
-      test_svd!((15, 10), random_normal_f32, uninit_buff_f32,  |x, _| x as f32            );
-      test_svd!((15, 10), random_normal_f64, uninit_buff_f64,  |x, _| x as f64            );
-      test_svd!((15, 10), random_normal_c32, uninit_buff_f32,  |x, y| Complex32::new(x, y));
-      test_svd!((15, 10), random_normal_c64, uninit_buff_f64,  |x, y| Complex64::new(x, y));
+      _test_svd::<f32>(      (10, 15), 1e-5 );
+      _test_svd::<f64>(      (10, 15), 1e-10);
+      _test_svd::<Complex32>((10, 15), 1e-5 );
+      _test_svd::<Complex64>((10, 15), 1e-10);
+      _test_svd::<f32>(      (15, 10), 1e-5 );
+      _test_svd::<f64>(      (15, 10), 1e-10);
+      _test_svd::<Complex32>((15, 10), 1e-5 );
+      _test_svd::<Complex64>((15, 10), 1e-10);
     }
   }
 
-  macro_rules! test_qr {
-    ($sizes:expr, $gen_fn:ident, $eye_fn:ident) => {
-      let (m, n) = $sizes;
-      let min_dim = std::cmp::min(m, n);
-      let mut buff_a = $gen_fn(m * n);
-      let buff_a_copy = buff_a.clone();
-      let a = NDArray::from_mut_slice(&mut buff_a, [m, n]).unwrap();
-      let a_copy = NDArray::from_slice(&buff_a_copy, [m, n]).unwrap();
-      let mut buff_other = $gen_fn(min_dim * min_dim);
-      let other = NDArray::from_mut_slice(&mut buff_other, [min_dim, min_dim]).unwrap();
-      a.qr(other).unwrap();
-      let (q, r) = if m > n { (a, other) } else { (other, a) };
-      // Here we check the isometric property of q;
-      let eye_buff = $eye_fn(min_dim);
-      let eye = NDArray::from_slice(&eye_buff, [min_dim, min_dim]).unwrap();
-      let (mut _buff_q_dag, q_dag) = q.gen_f_array();
-      //let q_dag = NDArray::from_mut_slice(&mut buff_q_dag, [m, min_dim]).unwrap();
-      q_dag.conj();
-      let mut buff_result = $gen_fn(min_dim * min_dim);
-      let result = NDArray::from_mut_slice(&mut buff_result, [min_dim, min_dim]).unwrap();
-      result.matmul_inplace(q_dag.transpose([1, 0]).unwrap(), q).unwrap();
-      result.sub_inpl(eye).unwrap();
-      assert!(result.norm_n_pow_n(2) < 1e-5);
-      // Here we check the correctness of the decomposition
-      let mut result_buff = $gen_fn(m * n);
-      let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
-      result.matmul_inplace(q, r).unwrap();
-      result.sub_inpl(a_copy).unwrap();
-      assert!(result.norm_n_pow_n(2) < 1e-5);
-    };
+  #[inline]
+  unsafe fn _test_qr<T>(size: (usize, usize), acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (m, n) = size;
+    let min_dim = std::cmp::min(m, n);
+    let mut buff_a = T::random_normal(m * n);
+    let buff_a_copy = buff_a.clone();
+    let a = NDArray::from_mut_slice(&mut buff_a, [m, n]).unwrap();
+    let a_copy = NDArray::from_slice(&buff_a_copy, [m, n]).unwrap();
+    let mut buff_other = T::random_normal(min_dim * min_dim);
+    let other = NDArray::from_mut_slice(&mut buff_other, [min_dim, min_dim]).unwrap();
+    a.qr(other).unwrap();
+    let (q, r) = if m > n { (a, other) } else { (other, a) };
+    // Here we check the isometric property of q;
+    let eye_buff = T::eye(min_dim);
+    let eye = NDArray::from_slice(&eye_buff, [min_dim, min_dim]).unwrap();
+    let (mut _buff_q_dag, q_dag) = q.gen_f_array();
+    //let q_dag = NDArray::from_mut_slice(&mut buff_q_dag, [m, min_dim]).unwrap();
+    q_dag.conj();
+    let mut buff_result = T::random_normal(min_dim * min_dim);
+    let result = NDArray::from_mut_slice(&mut buff_result, [min_dim, min_dim]).unwrap();
+    result.matmul_inplace(q_dag.transpose([1, 0]).unwrap(), q).unwrap();
+    result.sub_inpl(eye).unwrap();
+    assert!(result.norm_n_pow_n(2).abs() < acc);
+    // Here we check the correctness of the decomposition
+    let mut result_buff = T::random_normal(m * n);
+    let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
+    result.matmul_inplace(q, r).unwrap();
+    result.sub_inpl(a_copy).unwrap();
+    assert!(result.norm_n_pow_n(2).abs() < acc);
   }
 
   #[test]
-  fn test_qr() {
+  fn test_qr() 
+  {
     unsafe {
-      test_qr!((5, 10), random_normal_f32, eye_f32);
-      test_qr!((5, 10), random_normal_f64, eye_f64);
-      test_qr!((5, 10), random_normal_c32, eye_c32);
-      test_qr!((5, 10), random_normal_c64, eye_c64);
-      test_qr!((10, 5), random_normal_f32, eye_f32);
-      test_qr!((10, 5), random_normal_f64, eye_f64);
-      test_qr!((10, 5), random_normal_c32, eye_c32);
-      test_qr!((10, 5), random_normal_c64, eye_c64);
+      _test_qr::<f32>(      (5, 10), 1e-5 );
+      _test_qr::<f64>(      (5, 10), 1e-10);
+      _test_qr::<Complex32>((5, 10), 1e-5 );
+      _test_qr::<Complex64>((5, 10), 1e-10);
+      _test_qr::<f32>(      (10, 5), 1e-5 );
+      _test_qr::<f64>(      (10, 5), 1e-10);
+      _test_qr::<Complex32>((10, 5), 1e-5 );
+      _test_qr::<Complex64>((10, 5), 1e-10);
     }
   }
 
-  macro_rules! test_rq {
-    ($sizes:expr, $gen_fn:ident, $eye_fn:ident) => {
-      let (m, n) = $sizes;
-      let min_dim = std::cmp::min(m, n);
-      let mut buff_a = $gen_fn(m * n);
-      let buff_a_copy = buff_a.clone();
-      let a = NDArray::from_mut_slice(&mut buff_a, [m, n]).unwrap();
-      let a_copy = NDArray::from_slice(&buff_a_copy, [m, n]).unwrap();
-      let mut buff_other = $gen_fn(min_dim * min_dim);
-      let other = NDArray::from_mut_slice(&mut buff_other, [min_dim, min_dim]).unwrap();
-      a.rq(other).unwrap();
-      let (r, q) = if m < n { (other, a) } else { (a, other) };
-      // Here we check the isometric property of q;
-      let eye_buff = $eye_fn(min_dim);
-      let eye = NDArray::from_slice(&eye_buff, [min_dim, min_dim]).unwrap();
-      let (mut _buff_q_dag, q_dag) = q.gen_f_array();
-      //let q_dag = NDArray::from_mut_slice(&mut buff_q_dag, [m, min_dim]).unwrap();
-      q_dag.conj();
-      let mut buff_result = $gen_fn(min_dim * min_dim);
-      let result = NDArray::from_mut_slice(&mut buff_result, [min_dim, min_dim]).unwrap();
-      result.matmul_inplace(q, q_dag.transpose([1, 0]).unwrap()).unwrap();
-      result.sub_inpl(eye).unwrap();
-      assert!(result.norm_n_pow_n(2) < 1e-5);
-      // Here we check the correctness of the decomposition
-      let mut result_buff = $gen_fn(m * n);
-      let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
-      result.matmul_inplace(r, q).unwrap();
-      result.sub_inpl(a_copy).unwrap();
-      assert!(result.norm_n_pow_n(2) < 1e-5);
-    };
+  #[inline]
+  unsafe fn _test_rq<T>(size: (usize, usize), acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (m, n) = size;
+    let min_dim = std::cmp::min(m, n);
+    let mut buff_a = T::random_normal(m * n);
+    let buff_a_copy = buff_a.clone();
+    let a = NDArray::from_mut_slice(&mut buff_a, [m, n]).unwrap();
+    let a_copy = NDArray::from_slice(&buff_a_copy, [m, n]).unwrap();
+    let mut buff_other = T::random_normal(min_dim * min_dim);
+    let other = NDArray::from_mut_slice(&mut buff_other, [min_dim, min_dim]).unwrap();
+    a.rq(other).unwrap();
+    let (r, q) = if m < n { (other, a) } else { (a, other) };
+    // Here we check the isometric property of q;
+    let eye_buff = T::eye(min_dim);
+    let eye = NDArray::from_slice(&eye_buff, [min_dim, min_dim]).unwrap();
+    let (mut _buff_q_dag, q_dag) = q.gen_f_array();
+    //let q_dag = NDArray::from_mut_slice(&mut buff_q_dag, [m, min_dim]).unwrap();
+    q_dag.conj();
+    let mut buff_result = T::random_normal(min_dim * min_dim);
+    let result = NDArray::from_mut_slice(&mut buff_result, [min_dim, min_dim]).unwrap();
+    result.matmul_inplace(q, q_dag.transpose([1, 0]).unwrap()).unwrap();
+    result.sub_inpl(eye).unwrap();
+    assert!(result.norm_n_pow_n(2).abs() < acc);
+    // Here we check the correctness of the decomposition
+    let mut result_buff = T::random_normal(m * n);
+    let result = NDArray::from_mut_slice(&mut result_buff, [m, n]).unwrap();
+    result.matmul_inplace(r, q).unwrap();
+    result.sub_inpl(a_copy).unwrap();
+    assert!(result.norm_n_pow_n(2).abs() < acc);
   }
 
   #[test]
   fn test_rq() {
     unsafe {
-      test_rq!((5, 10), random_normal_f32, eye_f32);
-      test_rq!((5, 10), random_normal_f64, eye_f64);
-      test_rq!((5, 10), random_normal_c32, eye_c32);
-      test_rq!((5, 10), random_normal_c64, eye_c64);
-      test_rq!((10, 5), random_normal_f32, eye_f32);
-      test_rq!((10, 5), random_normal_f64, eye_f64);
-      test_rq!((10, 5), random_normal_c32, eye_c32);
-      test_rq!((10, 5), random_normal_c64, eye_c64);
+      _test_rq::<f32>(      (5, 10), 1e-5);
+      _test_rq::<f64>(      (5, 10), 1e-10);
+      _test_rq::<Complex32>((5, 10), 1e-5);
+      _test_rq::<Complex64>((5, 10), 1e-10);
+      _test_rq::<f32>(      (10, 5), 1e-5);
+      _test_rq::<f64>(      (10, 5), 1e-10);
+      _test_rq::<Complex32>((10, 5), 1e-5);
+      _test_rq::<Complex64>((10, 5), 1e-10);
     }
   }
 
-  macro_rules! test_rank1_update {
-    ($sizes:expr, $gen_fn:ident, $alpha:expr, $zero:expr) => {
-      let (m, n) = $sizes;
-      let mut a_buff = $gen_fn(m * n);
-      let a = NDArray::from_mut_slice(&mut a_buff, [m, n]).unwrap();
-      let mut a_buff_copy = a_buff.clone();
-      let a_copy = NDArray::from_mut_slice(&mut a_buff_copy, [m, n]).unwrap();
-      let col_buff = $gen_fn(m);
-      let col = NDArray::from_slice(&col_buff, [m, 1]).unwrap();
-      let row_buff = $gen_fn(n);
-      let row = NDArray::from_slice(&row_buff, [1, n]).unwrap();
-      let alpha = $alpha;
-      a.rank1_update(col, row, alpha).unwrap();
-      let mut aux_buff = vec![$zero; m * n];
-      let aux = NDArray::from_mut_slice(&mut aux_buff, [m, n]).unwrap();
-      aux.add_inpl(col).unwrap();
-      aux.mul_inpl(row).unwrap();
-      aux.mul_by_scalar(alpha);
-      a_copy.add_inpl(aux).unwrap();
-      a_copy.sub_inpl(a).unwrap();
-      assert!(a_copy.norm_n_pow_n(2) < 1e-5);
-    };
+  #[inline]
+  unsafe fn _test_rank1_update<T>(
+    size: (usize, usize),
+    alpha: T,
+    acc: T::Real,
+  )
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (m, n) = size;
+    let mut a_buff = T::random_normal(m * n);
+    let a = NDArray::from_mut_slice(&mut a_buff, [m, n]).unwrap();
+    let mut a_buff_copy = a_buff.clone();
+    let a_copy = NDArray::from_mut_slice(&mut a_buff_copy, [m, n]).unwrap();
+    let col_buff = T::random_normal(m);
+    let col = NDArray::from_slice(&col_buff, [m, 1]).unwrap();
+    let row_buff = T::random_normal(n);
+    let row = NDArray::from_slice(&row_buff, [1, n]).unwrap();
+    a.rank1_update(col, row, alpha).unwrap();
+    let mut aux_buff = vec![T::zero(); m * n];
+    let aux = NDArray::from_mut_slice(&mut aux_buff, [m, n]).unwrap();
+    aux.add_inpl(col).unwrap();
+    aux.mul_inpl(row).unwrap();
+    aux.mul_by_scalar(alpha);
+    a_copy.add_inpl(aux).unwrap();
+    a_copy.sub_inpl(a).unwrap();
+    assert!(a_copy.norm_n_pow_n(2).abs() < acc);
   }
   #[test]
   fn test_rank1_update() {
     unsafe {
-      test_rank1_update!((5, 12), random_normal_f32, 1.2,                       0.                    );
-      test_rank1_update!((5, 12), random_normal_f64, 1.2,                       0.                    );
-      test_rank1_update!((5, 12), random_normal_c32, Complex32::new(1.2, 0.98), Complex32::new(0., 0.));
-      test_rank1_update!((5, 12), random_normal_c64, Complex64::new(1.2, 0.98), Complex64::new(0., 0.));
+      _test_rank1_update::<f32>(      (5, 12), 1.2,                       1e-5 );
+      _test_rank1_update::<f64>(      (5, 12), 1.2,                       1e-10);
+      _test_rank1_update::<Complex32>((5, 12), Complex32::new(1.2, 2.28), 1e-5 );
+      _test_rank1_update::<Complex64>((5, 12), Complex64::new(2.28, 4.2), 1e-10);
     }
   }
 
-  macro_rules! test_maxvol {
-    ($sizes:expr, $gen_fn:ident, $delta:expr) => {
-      let (m, n) = $sizes;
-      let mut a_buff = $gen_fn(m * n);
-      let a_buff_copy = a_buff.clone();
-      let a = NDArray::from_mut_slice(&mut a_buff, [m, n]).unwrap();
-      let a_copy = NDArray::from_slice(&a_buff_copy, [m, n]).unwrap();
-      let new_order = a.maxvol($delta).unwrap();
-      let (mut reordered_a_buff, _) = a_copy.transpose([1, 0]).unwrap().gen_f_array_from_axis_order(&new_order[..], 1);
-      let reordered_a = NDArray::from_mut_slice(&mut reordered_a_buff, [n, m]).unwrap();
-      let (lhs, rhs) = reordered_a.split_across_axis(1, n).unwrap();
-      lhs.solve(rhs).unwrap();
-      let max_val = rhs.into_f_iter().max_by(|x, y| {
-        (*x.0).abs().partial_cmp(&(*y.0).abs()).unwrap()
-      });
-      assert!((*max_val.unwrap().0).abs() < 1. + $delta, "lhs: {}, rhs: {}", (*max_val.unwrap().0).abs(), 1. + $delta);
-      rhs.transpose([1, 0]).unwrap().sub_inpl(a.subarray([n..m, 0..n]).unwrap()).unwrap();
-      assert!(rhs.norm_n_pow_n(2) < 1e-5);
-    };
+  #[inline]
+  unsafe fn _test_maxvol<T>(
+    size: (usize, usize),
+    delta: T::Real,
+    acc: T::Real,
+  )
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (m, n) = size;
+    let mut a_buff = T::random_normal(m * n);
+    let a_buff_copy = a_buff.clone();
+    let a = NDArray::from_mut_slice(&mut a_buff, [m, n]).unwrap();
+    let a_copy = NDArray::from_slice(&a_buff_copy, [m, n]).unwrap();
+    let new_order = a.maxvol(delta).unwrap();
+    let (mut reordered_a_buff, _) = a_copy.transpose([1, 0]).unwrap().gen_f_array_from_axis_order(&new_order[..], 1);
+    let reordered_a = NDArray::from_mut_slice(&mut reordered_a_buff, [n, m]).unwrap();
+    let (lhs, rhs) = reordered_a.split_across_axis(1, n).unwrap();
+    lhs.solve(rhs).unwrap();
+    let max_val = rhs.into_f_iter().max_by(|x, y| {
+      (*x.0).abs().partial_cmp(&(*y.0).abs()).unwrap()
+    });
+    assert!((*max_val.unwrap().0).abs() < T::Real::one() + delta, "lhs: {:#?}, rhs: {:#?}", (*max_val.unwrap().0).abs(), T::Real::one() + delta);
+    rhs.transpose([1, 0]).unwrap().sub_inpl(a.subarray([n..m, 0..n]).unwrap()).unwrap();
+    assert!(rhs.norm_n_pow_n(2).abs() < acc);
   }
 
   #[test]
   fn test_maxvol() {
     unsafe {
-      test_maxvol!((120, 50), random_normal_f32, 0.1 );
-      test_maxvol!((120, 50), random_normal_f64, 0.1 );
-      test_maxvol!((120, 50), random_normal_c32, 0.1 );
-      test_maxvol!((120, 50), random_normal_c64, 0.1 );
-      test_maxvol!((120, 50), random_normal_f32, 0.01);
-      test_maxvol!((120, 50), random_normal_f64, 0.01);
-      test_maxvol!((120, 50), random_normal_c32, 0.01);
-      test_maxvol!((120, 50), random_normal_c64, 0.01);
-      test_maxvol!((120, 50), random_normal_f32, 0.  );
-      test_maxvol!((120, 50), random_normal_f64, 0.  );
-      test_maxvol!((120, 50), random_normal_c32, 0.  );
-      test_maxvol!((120, 50), random_normal_c64, 0.  );
+      _test_maxvol::<f32>(      (120, 50), 0.1 , 1e-5 );
+      _test_maxvol::<f64>(      (120, 50), 0.1 , 1e-10);
+      _test_maxvol::<Complex32>((120, 50), 0.1 , 1e-5 );
+      _test_maxvol::<Complex64>((120, 50), 0.1 , 1e-10);
+      _test_maxvol::<f32>(      (120, 50), 0.01, 1e-5 );
+      _test_maxvol::<f64>(      (120, 50), 0.01, 1e-10);
+      _test_maxvol::<Complex32>((120, 50), 0.01, 1e-5 );
+      _test_maxvol::<Complex64>((120, 50), 0.01, 1e-10);
+      _test_maxvol::<f32>(      (120, 50), 0.  , 1e-5 );
+      _test_maxvol::<f64>(      (120, 50), 0.  , 1e-10);
+      _test_maxvol::<Complex32>((120, 50), 0.  , 1e-5 );
+      _test_maxvol::<Complex64>((120, 50), 0.  , 1e-10);
     }
   }
 }

@@ -1,6 +1,7 @@
+use num_complex::ComplexFloat;
 use ttrs::{
     TTVec,
-    TTf64,
+    TensorTrain,
 };
 
 // This function converts a bit string to a value from 0 to 4
@@ -16,6 +17,11 @@ fn idx_to_arg(x: &[usize]) -> f64 {
 fn target_function(x: &[usize]) -> f64 {
     let arg = idx_to_arg(x);
     ((arg - 1.23456789).powi(2) + 1e-7).ln() * (15. * (arg - 1.23456789)).cos()
+}
+
+#[inline]
+fn exp<T: ComplexFloat>(x: (T, T)) -> T {
+    x.0.exp() * x.1
 }
 
 fn main() {
@@ -54,7 +60,7 @@ fn main() {
     target.set_into_left_canonical().unwrap();
     let target_clone = target.clone();
     target.elementwise_prod(&target_clone).unwrap(); // Now  a target tensor train is a probability distribution
-    let argmin = target.log_dot(&tt_idx_to_arg).unwrap().exp(); // Argmin is an averaged argument over a probability distribution
-    println!("Resulting argmin = {}", argmin.re);
+    let argmin = exp(target.log_dot(&tt_idx_to_arg).unwrap()); // Argmin is an averaged argument over a probability distribution
+    println!("Resulting argmin = {}", argmin.re());
     println!("Exact argmin = {}", 1.23456789)
 }

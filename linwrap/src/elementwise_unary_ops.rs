@@ -53,10 +53,11 @@ where
 
 #[cfg(test)]
 mod tests {
-  use crate::{init_utils::random_normal_c64, NDArray};
+  use num_complex::Complex64;
+  use crate::{init_utils::BufferGenerator, NDArray};
   macro_rules! test_elementwise_ops {
     ($fn_name:ident) => {
-      let mut buff = random_normal_c64(256);
+      let mut buff = Complex64::random_normal(256);
       let mut buff_copy = buff.clone();
       let arr = NDArray::from_mut_slice(&mut buff, [8, 4, 8]).unwrap().transpose([1, 2, 0]).unwrap();
       unsafe { arr.$fn_name() };

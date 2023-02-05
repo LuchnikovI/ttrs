@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+num-traits = "0.2.15"
 num-complex = "0.4.2"
 #rayon = "1.6.0"
 rawpointer = "0.2.1"

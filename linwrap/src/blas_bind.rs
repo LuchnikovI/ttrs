@@ -5,11 +5,11 @@ use std::ffi::{
   c_int,
 };
 
-use num_complex::{Complex64, Complex32};
+use num_complex::{Complex64, Complex32, ComplexFloat};
 
 macro_rules! gemm {
   ($fn_name:ident, $type_name:ident) => {
-    pub(super) fn $fn_name(
+    fn $fn_name(
       transa: *const c_char,
       transb: *const c_char,
       m:      *const c_int,
@@ -36,7 +36,7 @@ extern "C" {
 
 macro_rules! ger {
   ($fn_name:ident, $type_name:ident) => {
-    pub(super) fn $fn_name(
+    fn $fn_name(
       m:     *const c_int,
       n:     *const c_int,
       alpha: *const $type_name,
@@ -59,7 +59,7 @@ extern "C" {
 
 macro_rules! trsm {
   ($fn_name:ident, $type_name:ident) => {
-    pub(super) fn $fn_name(
+    fn $fn_name(
       side:   *const c_char,
       uplo:   *const c_char,
       transa: *const c_char,
@@ -81,3 +81,110 @@ extern "C" {
   trsm!(ctrsm_, Complex32);
   trsm!(ztrsm_, Complex64);
 }
+
+pub trait Blas: ComplexFloat
+{
+  unsafe fn gemm(
+    transa: *const c_char,
+    transb: *const c_char,
+    m:      *const c_int,
+    n:      *const c_int,
+    k:      *const c_int,
+    alpha:  *const Self ,
+    a:      *const Self ,
+    lda:    *const c_int,
+    b:      *const Self ,
+    ldb:    *const c_int,
+    beta:   *const Self ,
+    c:      *mut   Self ,
+    ldc:    *const c_int,
+  );
+  unsafe fn ger(
+    m:     *const c_int,
+    n:     *const c_int,
+    alpha: *const Self ,
+    x:     *const Self ,
+    incx:  *const c_int,
+    y:     *const Self ,
+    incy:  *const c_int,
+    a:     *mut   Self ,
+    lda:   *const c_int,
+  );
+  unsafe fn trsm(
+    side:   *const c_char,
+    uplo:   *const c_char,
+    transa: *const c_char,
+    diag:   *const c_char,
+    m:      *const c_int,
+    n:      *const c_int,
+    alpha:  *const Self ,
+    a:      *mut   Self ,
+    lda:    *const c_int,
+    b:      *mut   Self ,
+    ldb:    *const c_int,
+  );
+}
+
+macro_rules! impl_blas {
+  ($type:ty, $gemm:ident, $ger:ident, $trsm:ident) => {
+    impl Blas for $type 
+    {
+      #[inline]
+      unsafe fn gemm(
+        transa: *const c_char,
+        transb: *const c_char,
+        m:      *const c_int,
+        n:      *const c_int,
+        k:      *const c_int,
+        alpha:  *const Self ,
+        a:      *const Self ,
+        lda:    *const c_int,
+        b:      *const Self ,
+        ldb:    *const c_int,
+        beta:   *const Self ,
+        c:      *mut   Self ,
+        ldc:    *const c_int,
+      )
+      {
+        $gemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
+      }
+      #[inline]
+      unsafe fn ger(
+        m:     *const c_int,
+        n:     *const c_int,
+        alpha: *const Self ,
+        x:     *const Self ,
+        incx:  *const c_int,
+        y:     *const Self ,
+        incy:  *const c_int,
+        a:     *mut   Self ,
+        lda:   *const c_int,
+      )
+      {
+        $ger(m, n, alpha, x, incx, y, incy, a, lda);
+      }
+      #[inline]
+      unsafe fn trsm(
+        side:   *const c_char,
+        uplo:   *const c_char,
+        transa: *const c_char,
+        diag:   *const c_char,
+        m:      *const c_int,
+        n:      *const c_int,
+        alpha:  *const Self ,
+        a:      *mut   Self ,
+        lda:    *const c_int,
+        b:      *mut   Self ,
+        ldb:    *const c_int,
+      )
+      {
+        $trsm(side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb);
+      }
+    }
+  };
+}
+
+impl_blas!(f32,       sgemm_, sger_ , strsm_);
+impl_blas!(f64,       dgemm_, dger_ , dtrsm_);
+impl_blas!(Complex32, cgemm_, cgeru_, ctrsm_);
+impl_blas!(Complex64, zgemm_, zgeru_, ztrsm_);

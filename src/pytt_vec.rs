@@ -7,10 +7,9 @@ use num_complex::Complex64;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    TTc64,
-    CBc64,
     TTVec,
-    tt_traits::TTError,
+    tt_traits::TTError, CrossBuilder,
+    TensorTrain,
 };
 
 // ------------------------------------------------------------------------------- //
@@ -23,7 +22,7 @@ impl From<TTError> for PyErr {
 
 // ------------------------------------------------------------------------------- //
 
-/// This function initializes a random Tensor Train whose kernels are random tensors
+/// Initializes a random Tensor Train whose kernels are random tensors
 /// with i.i.d. elements distributed according to N(0, 1). It also initializes additional
 /// meta-information necessary for cross approximation subroutine.
 /// Args:
@@ -39,7 +38,7 @@ impl From<TTError> for PyErr {
 ///     [TTVc64]: Tensor train object.
 #[pyclass(text_signature = "(mode_dims: List[int], rank: int, delta: double, tt_opt: bool)")]
 #[derive(Clone)]
-pub struct TTVc64(CBc64<TTVec<Complex64>>);
+pub struct TTVc64(CrossBuilder<Complex64, TTVec<Complex64>>);
 
 #[pymethods]
 impl TTVc64 {
@@ -47,10 +46,10 @@ impl TTVc64 {
     #[args(mode_dims, rank, delta="0.01", tt_opt="false")]
     #[new]
     fn new(mode_dims: Vec<usize>, rank: usize, delta: f64, tt_opt: bool) -> Self {
-        Self (CBc64::new(rank, delta, &mode_dims, tt_opt))
+        Self (CrossBuilder::new(rank, delta, &mode_dims, tt_opt))
     }
 
-    /// This method returns a list with dimensions of bonds
+    /// Returns a list with dimensions of bonds
     /// connecting neighboring kernels.
     /// Returns:
     ///     [List[int]]: bond dimensions.
@@ -58,69 +57,77 @@ impl TTVc64 {
         self.0.tt.get_bonds().to_owned()
     }
 
-    /// This method conjugates a Tensor Train inplace.
+    /// Conjugates a Tensor Train inplace.
     /// Note: meaningful only for complex valued tensors.
     fn conj(&mut self) {
         self.0.tt.conj()
     }
 
-    /// This method returns a natural logarithm of the dot product of
-    /// two Tensor Trains. The natural logarithm is necessary to ensure
-    /// stability when the dot product is exponentially big.
+    /// Computes a dot product of two Tensor Trains.
+    /// Returns the result as a tuple of two values: the first value v1 is the logarithm
+    /// of the dot product modulo, the second value v2 is the phase multiplier that can be written
+    /// as v2 = exp(i * phi). The dot product can be reconstructed from these two values as
+    /// exp(v1) * v2. Such overcomplicated output is motivated by the fact, that
+    /// the dot product can be exponentially large in some cases.
     /// Args:
     ///     other (TTVc64): another Tensor Train.
     /// Returns:
-    ///     [Complex<double>]: the dot product value.
-    fn log_dot(&self, other: &TTVc64) -> PyResult<Complex64> {
+    ///     [Tuple[Complex<double>]]: tuple with two values v1 and v2 (see explanation above).
+    fn log_dot(&self, other: &TTVc64) -> PyResult<(Complex64, Complex64)> {
         let val = self.0.tt.log_dot(&other.0.tt)?;
         Ok(val)
     }
 
-    /// This method returns a natural logarithm of the sum of all the elements
-    /// of a tensor encoded in Tensor Train format. The natural logarithm is necessary to ensure
-    /// stability when the sum is exponentially big.
+    /// Computes the sum of all elements of a tensor represented by a Tensor Train.
+    /// Returns the result as a tuple of two values: the first value v1 is the logarithm
+    /// of the sum, the second value v2 is the phase multiplier that can be written
+    /// as v2 = exp(i * phi). The resulting sum can be reconstructed from these two values as
+    /// exp(v1) * v2. Such overcomplicated output is motivated by the fact, that
+    /// the value of sum can be exponentially large in some cases.
     /// Returns:
-    ///     [Complex<double>]: the sum value.
-    fn log_sum<'py>(&self) -> PyResult<Complex64> {
+    ///     [Tuple[Complex<double>]]: tuple with two values v1 and v2 (see explanation above).
+    fn log_sum<'py>(&self) -> PyResult<(Complex64, Complex64)> {
         let val = self.0.tt.log_sum()?;
         Ok(val)
     }
 
-    /// This method sets a Tensor Train into the left-canonical form inplace.
+    /// Sets a Tensor Train into the left-canonical form inplace.
     /// It returns the natural logarithm of the L2 norm of the initial tensor.
     /// The L2 norm of the tensor after this subroutine is equal to 1.
     /// Returns:
     ///     [double]: natural logarithm of the L2 norm.
-    fn set_into_left_canonical(&mut self) -> PyResult<f64> {
+    fn set_into_left_canonical(&mut self) -> PyResult<Complex64> {
         let val = self.0.tt.set_into_left_canonical()?;
         Ok(val)
     }
 
-    /// This method sets a Tensor Train into the right-canonical form inplace.
+    /// Sets a Tensor Train into the right-canonical form inplace.
     /// It returns the natural logarithm of the L2 norm of the initial tensor.
     /// The L2 norm of the tensor after this subroutine is equal to 1.
     /// Returns:
     ///     [double]: natural logarithm of the L2 norm.
-    fn set_into_right_canonical(&mut self) -> PyResult<f64> {
+    fn set_into_right_canonical(&mut self) -> PyResult<Complex64> {
         let val = self.0.tt.set_into_right_canonical()?;
         Ok(val)
     }
 
-
-    /// This method evaluates a tensor at a given index. It returns the natural logarithm of the
-    /// actual element value, it is necessary to ensure stability of the computation if an
-    /// element is exponentially small / big.
+    /// Computes an element of a Tensor Train given the index.
+    /// Returns the result as a tuple of two values: the first value v1 is the logarithm
+    /// of the element modulo, the second value v2 is the phase multiplier that can be written
+    /// as v2 = exp(i * phi). The value of an element can be reconstructed from these two values as
+    /// exp(v1) * v2. Such overcomplicated output is motivated by the fact, that
+    /// the value of an element can be exponentially large in some cases.
     /// Args:
     ///     index (np.ndarray<int>): index specifying an element of a tensor.
     /// Returns:
-    ///     [Complex<double>]: an element of a Tensor Train.
-    fn log_eval_index(&self, index: &PyArray1<i64>) -> PyResult<Complex64> {
+    ///     [Tuple[Complex<double>]]: tuple with two values v1 and v2 (see explanation above).
+    fn log_eval_index(&self, index: &PyArray1<i64>) -> PyResult<(Complex64, Complex64)> {
         let index: Vec<_> = unsafe { index.as_slice()? }.into_iter().map(|x| *x as usize).collect();
         let val = self.0.tt.log_eval_index(&index[..])?;
         Ok(val)
     }
 
-    /// This method truncates the left-canonical form of a Tensor Train. A Tensor Train is normalized
+    /// Truncates the left-canonical form of a Tensor Train. A Tensor Train is normalized
     /// to 1 after truncation. The actual L2 norm is returned by this method.
     /// Args:
     ///     delta (f64): truncation accuracy.
@@ -131,7 +138,7 @@ impl TTVc64 {
         Ok(val)
     }
 
-    /// This method truncates the right-canonical form of a Tensor Train. A Tensor Train is normalized
+    /// Truncates the right-canonical form of a Tensor Train. A Tensor Train is normalized
     /// to 1 after truncation. The actual L2 norm is returned by this method.
     /// Args:
     ///     delta (f64): truncation accuracy.
@@ -142,7 +149,7 @@ impl TTVc64 {
         Ok(val)
     }
 
-    /// This method multiply a given Tensor Train by an another one element-wisely.
+    /// Multiply a given Tensor Train by an another one element-wisely.
     /// The given tensor is being modified.
     /// Args:
     ///     other (TTVc64): an another Tensor Train.
@@ -151,7 +158,7 @@ impl TTVc64 {
         Ok(())
     }
 
-    /// This method add to a given Tensor Train an another one element-wisely.
+    /// Adds to a given Tensor Train an another one element-wisely.
     /// The given tensor is being modified.
     /// Args:
     ///     other (TTVc64): an another Tensor Train.
@@ -160,7 +167,7 @@ impl TTVc64 {
         Ok(())
     }
 
-    /// This method multiply a Tensor Train by a scalar inplace.
+    /// Multiplies a Tensor Train by a scalar inplace.
     /// Args:
     ///     scalar (Complex<double>): scalar.
     fn mul_by_scalar(&mut self, scalar: Complex64) -> PyResult<()> {
@@ -168,7 +175,7 @@ impl TTVc64 {
         Ok(())
     }
 
-    /// This method returns a set of indices that needs to be evaluated at the
+    /// Returns a set of indices that needs to be evaluated at the
     /// current step of the TTCross interpolation.
     /// Returns:
     ///     [np.ndarray]: matrix whose rows are indices that need to be evaluated.
@@ -187,7 +194,7 @@ impl TTVc64 {
         }
     }
 
-    /// This method updates a Tensor Train according to the obtained measurement results.
+    /// Updates a Tensor Train according to the obtained measurement results.
     /// Args:
     ///     measurements (np.ndarray<Complex<double>>): a vector with measurement results.
     /// Note, that for the TTCross output to be meaningful, the number of updates must be
@@ -207,13 +214,13 @@ impl TTVc64 {
         Ok(())
     }
 
-    /// This method returns a copy of a Tensor Train
+    /// Returns a copy of a Tensor Train
     fn get_clone(&self) -> Self
     {
         self.clone()
     }
 
-    /// This method returns kernels of a Tensor Train.
+    /// Returns kernels of a Tensor Train.
     /// Returns:
     ///     [List[np.ndarray<double>]]: list with kernels.
     fn get_kernels<'py>(&self, py: Python<'py>) -> PyResult<Vec<&'py PyArray3<Complex64>>>
@@ -253,7 +260,7 @@ impl TTVc64 {
         Ok(val)
     }
 
-    /// This method returns an approximate argument of the maximum modulo element if the flag
+    /// Returns an approximate argument of the maximum modulo element if the flag
     /// "tt_opt" was set at the initialization. For more details see https://arxiv.org/abs/2205.00293.
     /// Returns:
     ///     [Union[None, List[int]]]: approximate argument of the maximum modulo element.

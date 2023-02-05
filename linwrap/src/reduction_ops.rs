@@ -24,13 +24,13 @@ macro_rules! reduction_ops_to_scalar {
   ($ptr_type:ident) => {
     impl<T, const N: usize> NDArray<*$ptr_type T, N>
     where
-      T: ComplexFloat + Send + Sync + 'static,
-      <T as ComplexFloat>::Real: Sum + Send + Sync + PartialOrd,
+      T: ComplexFloat + Sum + Send + Sync + 'static,
+      <T as ComplexFloat>::Real: Send + Sync + PartialOrd,
     {
-      pub unsafe fn norm_n_pow_n(self, n: usize) -> <T as ComplexFloat>::Real {
+      pub unsafe fn norm_n_pow_n(self, n: usize) -> T {
         self.into_cache_friendly_iter()
-          .map(|x| { (*x.0).abs().powi(n as i32) })
-          .sum::<<T as ComplexFloat>::Real>()
+          .map(|x| { (*x.0 * (*x.0).conj()).sqrt().powi(n as i32) })
+          .sum::<T>()
       }
       pub unsafe fn argmax(self) -> (T, [usize; N])
       {
@@ -102,7 +102,7 @@ reduction_ops_to_array!(const, reduce_abs_max, |x: *mut T, y: *const T| *x = max
 #[cfg(test)]
 mod tests {
   use crate::NDArray;
-  use crate::init_utils::random_normal_f64;
+  use crate::init_utils::BufferGenerator;
   use ndarray::Array4;
   use ndarray::Axis;
 
@@ -148,7 +148,7 @@ mod tests {
 
   #[test]
   fn test_reduce_abs_max() {
-    let buff = random_normal_f64(256);
+    let buff = f64::random_normal(256);
     let mut dst_buff = vec![0.; 16];
     let arr1 = NDArray::from_slice(&buff, [4, 8, 4, 2]).unwrap();
     let dst_arr = NDArray::from_mut_slice(&mut dst_buff, [4, 1, 4, 1]).unwrap();

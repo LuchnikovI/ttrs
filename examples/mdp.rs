@@ -1,9 +1,9 @@
 use std::collections::HashSet;
-
+use num_complex::ComplexFloat;
 use rand::{thread_rng, Rng};
 use ttrs::{
     TTVec,
-    TTf64,
+    TensorTrain,
 };
 
 #[derive(Clone, Debug)]
@@ -104,6 +104,11 @@ unsafe fn run_mdp(seq: &[usize]) -> f64 {
     get_reward(&state, 7, (6, 6))
 }
 
+#[inline]
+fn exp<T: ComplexFloat>(x: (T, T)) -> T {
+    x.0.exp() * x.1
+}
+
 
 fn main() {
     let mut rng = thread_rng();
@@ -113,7 +118,7 @@ fn main() {
     println!("Exact reward value vs predicted:");
     for _ in 0..10 {
         let random_seq: Vec<_> = (0..50).map(|_| { rng.gen::<usize>() % 4 }).collect();
-        println!("{:?} vs {:?}", unsafe { run_mdp(&random_seq) }, tt.log_eval_index(&random_seq).unwrap().exp().re);
+        println!("{:?} vs {:?}", unsafe { run_mdp(&random_seq) }, exp(tt.log_eval_index(&random_seq).unwrap()).re());
     }
     tt.set_into_left_canonical().unwrap();
     tt.truncate_left_canonical(1e-5).unwrap();

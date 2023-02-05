@@ -163,7 +163,7 @@ where
 #[cfg(test)]
 mod tests {
   use super::{get_trunc_dim, build_bonds, indices_prod, build_random_indices, get_indices_iter, argsort};
-  use linwrap::init_utils::random_normal_c64;
+  use linwrap::init_utils::BufferGenerator;
   use num_complex::{
     Complex64,
     ComplexFloat,
@@ -303,8 +303,9 @@ mod tests {
   }
 
   #[test]
-  fn test_argsort() {
-    let values: Vec<Complex64> = random_normal_c64(100);
+  fn test_argsort()
+  {
+    let values: Vec<Complex64> = Complex64::random_normal(100);
     let args = argsort(&values);
     let mut prev = f64::MAX;
     assert!(args.into_iter().all(|i| {
