@@ -9,6 +9,7 @@ use crate::tt_traits::{
     TTIterMut,
     TTResult,
     TensorTrain,
+    TTError,
 };
 
 use crate::tt_cross::CrossBuilder;
@@ -22,6 +23,7 @@ pub struct TTVec<T>
     pub(super) left_bonds:  Vec<usize>,
     pub(super) right_bonds: Vec<usize>,
     pub(super) mode_dims:   Vec<usize>,
+    pub(super) orth_center: Option<usize>,
 }
 
 impl<T> TensorTrain<T> for TTVec<T>
@@ -42,7 +44,15 @@ where
       for (left_bond, (dim, right_bond)) in left_bonds.iter().zip(mode_dims.iter().zip(right_bonds.iter())) {
         kernels.push(T::random_normal(*left_bond * *dim * *right_bond));
       }
-      Self { kernels, left_bonds, right_bonds, mode_dims }
+      Self { kernels, left_bonds, right_bonds, mode_dims, orth_center: None }
+    }
+    #[inline]
+    fn get_orth_center_coordinate(&self) -> TTResult<usize> {
+        self.orth_center.ok_or(TTError::UndefinedOrthCenter)
+    }
+    #[inline]
+    unsafe fn set_orth_center_coordinate(&mut self, coord: Option<usize>) {
+        self.orth_center = coord;
     }
     #[inline]
     fn get_kernels(&self) ->  &[Vec<T>] {
@@ -149,6 +159,7 @@ where
         left_bonds,
         right_bonds,
         mode_dims,
+        orth_center: None,
       }
     }
 }

@@ -9,7 +9,6 @@ use linwrap::{
   LinalgReal,
 };
 
-
 use crate::TensorTrain;
 use crate::utils::{
   build_random_indices,
@@ -82,6 +81,7 @@ where
     }
   }
   /// Turns a TTCross builder into the corresponding Tensor Train.
+  #[inline]
   pub fn to_tt(self) -> TT {
     self.tt
   }
@@ -89,6 +89,7 @@ where
   /// (see <https://arxiv.org/abs/2205.00293>) if flag tt_opt was turned
   /// ON at the initialization. Note, that TTOpt method finds maximum
   /// modulo element only approximately.
+  #[inline]
   pub fn get_tt_opt_argmax(&self) -> Option<Vec<usize>> {
     self.argabsmax.clone()
   }
@@ -104,6 +105,7 @@ where
   ///
   /// # Note
   /// This method is mostly for development needs.
+  #[inline]
   pub(super) fn get_args(
     &self,
   ) -> Option<impl IndexedParallelIterator<Item = Vec<usize>>>
@@ -159,6 +161,7 @@ where
   /// * 'measurements' - an optional iterator over elements which were evaluated
   /// 
   /// This method is mostly for development needs.
+  #[inline]
   pub(super) fn update(
     &mut self,
     measurements: Option<impl IndexedParallelIterator<Item = T>>
@@ -294,8 +297,9 @@ where
   /// # Arguments
   /// 
   /// * 'f' - function, which is being reconstructed
-  /// 
+  ///
   /// # Note the result is meaningful only when number of steps n holds n % modes_number == 0.
+  #[inline]
   pub(super) fn next(
     &mut self,
     f: impl Fn(&[usize]) -> T + Sync,
