@@ -91,6 +91,20 @@ impl TTVc64 {
         Ok(val)
     }
 
+    /// Sets a Tensor Train into the mixed-canonical form inplace.
+    /// It returns the natural logarithm of the L2 norm of the initial tensor.
+    /// The L2 norm of the tensor after this subroutine is equal to 1.
+    /// Args:
+    ///     coord: (int): index, where to put the orthogonality center.
+    ///            (for the right-canonical it is 0, for the left-canonical it is
+    ///             modes_number-1)
+    /// Returns:
+    ///     [double]: natural logarithm of the L2 norm.
+    fn set_into_mixed_canonical(&mut self, coord: usize) -> PyResult<Complex64> {
+        let val = self.0.tt.set_into_mixed_canonical(coord)?;
+        Ok(val)
+    }
+
     /// Sets a Tensor Train into the left-canonical form inplace.
     /// It returns the natural logarithm of the L2 norm of the initial tensor.
     /// The L2 norm of the tensor after this subroutine is equal to 1.

@@ -47,6 +47,18 @@ where
       Self { kernels, left_bonds, right_bonds, mode_dims, orth_center: None }
     }
     #[inline]
+    unsafe fn build_from_raw_parts(
+        mode_dims: Vec<usize>,
+        bond_dims: Vec<usize>,
+        kernels:   Vec<Vec<T>>,
+      ) -> Self {
+        let mut left_bonds = vec![1usize];
+        left_bonds.extend_from_slice(&bond_dims);
+        let mut right_bonds = bond_dims;
+        right_bonds.push(1);
+        Self { kernels, left_bonds, right_bonds, mode_dims, orth_center: None }
+    }
+    #[inline]
     fn get_orth_center_coordinate(&self) -> TTResult<usize> {
         self.orth_center.ok_or(TTError::UndefinedOrthCenter)
     }
@@ -395,5 +407,62 @@ use num_complex::{
   fn test_optima_tt_max() {
     _test_argmax_modulo::<f64>(1e-8, 1e-5);
     _test_argmax_modulo::<Complex64>(1e-8, 1e-5);
+  }
+
+  #[inline]
+  fn _test_reduced_sum<T>(mask: [bool; 25], acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let mode_dims = vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3, 4, 5, 6, 5, 4, 3, 4, 5, 6, 7, 6, 5, 4];
+    let reduced_mode_dims: Vec<_> = mode_dims.iter().zip(mask).filter(|(_, p)| *p).map(|(x, _)| *x).collect();
+    let tt = TTVec::<T>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3, 4, 5, 6, 5, 4, 3, 4, 5, 6, 7, 6, 5, 4], 35);
+    let reduced_tt = tt.reduced_sum(&mask).unwrap();
+    assert_eq!(reduced_tt.get_mode_dims(), &reduced_mode_dims);
+    let (reduced_log_abs, reduced_phase) = reduced_tt.log_sum().unwrap();
+    let (log_abs, phase) = tt.log_sum().unwrap();
+    assert!((reduced_log_abs - log_abs).abs() < acc);
+    assert!((phase - reduced_phase).abs() < acc);
+  }
+
+  #[test]
+  fn test_reduced_sum() {
+    let mask = [
+      true, true, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, true,
+    ];
+    _test_reduced_sum::<f32>(      mask, 1e-4 );
+    _test_reduced_sum::<f64>(      mask, 1e-10);
+    _test_reduced_sum::<Complex32>(mask, 1e-4 );
+    _test_reduced_sum::<Complex64>(mask, 1e-10);
+    let mask = [
+      false, false, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, true,
+    ];
+    _test_reduced_sum::<f32>(      mask, 1e-4 );
+    _test_reduced_sum::<f64>(      mask, 1e-10);
+    _test_reduced_sum::<Complex32>(mask, 1e-4 );
+    _test_reduced_sum::<Complex64>(mask, 1e-10);
+    let mask = [
+      true, true, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, false,
+    ];
+    _test_reduced_sum::<f32>(      mask, 1e-4 );
+    _test_reduced_sum::<f64>(      mask, 1e-10);
+    _test_reduced_sum::<Complex32>(mask, 1e-4 );
+    _test_reduced_sum::<Complex64>(mask, 1e-10);
+    let mask = [
+      false, false, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, false,
+    ];
+    _test_reduced_sum::<f32>(      mask, 1e-4 );
+    _test_reduced_sum::<f64>(      mask, 1e-10);
+    _test_reduced_sum::<Complex32>(mask, 1e-4 );
+    _test_reduced_sum::<Complex64>(mask, 1e-10);
   }
 }
