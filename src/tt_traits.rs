@@ -546,7 +546,7 @@ where
   /// 
   /// # Arguments
   /// 
-  /// * 'mask' binary mask specifying which modes should be summed out. Modes marked as
+  /// * 'mask' - binary mask specifying which modes should be summed out. Modes marked as
   ///   'true' remains in the output Tensot Train. Modes marked as 'false' are being summed out.
   #[inline]
   fn reduced_sum(&self, mask: &[bool]) -> TTResult<Self>
@@ -632,6 +632,96 @@ where
     }
     Ok(reduced_tt)
   }
+
+  /// Returns the Tensor Train with some modes being evaluated.
+  /// 
+  /// # Arguments
+  /// 
+  /// * 'mask' - mask specifying which modes need to be evaluated.
+  ///   If a value in the mask is equal -1, then mode remains untouched.
+  ///   If a value in the mask is 0, 1, 2, ..., then this value is substituted
+  ///   as an index.
+  #[inline]
+  fn partial_eval(&self, mask: &[isize]) -> TTResult<Self>
+  {
+    if mask.len() != self.get_len() { return Err(TTError::LengthsMismatch); }
+    let reduced_len: usize = mask.into_iter().filter(|x| **x == -1).map(|_| 1).sum();
+    let mut kernels: Vec<Vec<T>> = Vec::with_capacity(reduced_len);
+    let mut left_bonds = Vec::with_capacity(reduced_len);
+    let mut right_bonds = Vec::with_capacity(reduced_len);
+    let mut mode_dims = Vec::with_capacity(reduced_len);
+    let mut prev_idx  = -1;
+    let mut agr_buff = Vec::new();
+    let mut nrows = 1usize;
+    let mut log_norm = T::zero();
+    for ((ker_buff, right_bond, left_bond, mode_dim), idx) in self.iter().zip(mask) {
+      if *idx == -1 {
+        if prev_idx == -1
+        {
+          kernels.push(ker_buff.clone());
+          left_bonds.push(left_bond);
+          right_bonds.push(right_bond);
+          mode_dims.push(mode_dim);
+        } else {
+          let agr = NDArray::from_slice(&agr_buff, [nrows, left_bond])?;
+          let mut new_ker_buff = unsafe { T::uninit_buff(nrows * mode_dim * right_bond) };
+          let new_ker = NDArray::from_mut_slice(&mut new_ker_buff, [nrows, mode_dim * right_bond])?;
+          let ker = NDArray::from_slice(&ker_buff, [left_bond, mode_dim * right_bond])?;
+          unsafe { new_ker.matmul_inplace(agr, ker) }?;
+          kernels.push(new_ker_buff);
+          left_bonds.push(nrows);
+          right_bonds.push(right_bond);
+          mode_dims.push(mode_dim);
+        }
+      } else {
+        if prev_idx == -1
+        {
+          nrows = left_bond;
+          let ker = NDArray::from_slice(ker_buff, [left_bond, mode_dim, right_bond])?;
+          (agr_buff, _) = unsafe { ker.subarray([0..left_bond, (*idx as usize)..(*idx as usize+1), 0..right_bond])?.gen_f_array() };
+        } else {
+          let ker = NDArray::from_slice(ker_buff, [left_bond, mode_dim, right_bond])?;
+          let (reduced_ker_buff, _) = unsafe { ker.subarray([0..left_bond, (*idx as usize)..(*idx as usize+1), 0..right_bond])?.gen_f_array() };
+          let reduced_ker = NDArray::from_slice(&reduced_ker_buff, [left_bond, right_bond])?;
+          let mut new_agr_buff = unsafe { T::uninit_buff(nrows * right_bond) };
+          let new_agr = NDArray::from_mut_slice(&mut new_agr_buff, [nrows, right_bond])?;
+          let agr = NDArray::from_slice(&agr_buff, [nrows, left_bond])?;
+          unsafe { new_agr.matmul_inplace(agr, reduced_ker)?; }
+          agr_buff = new_agr_buff;
+        }
+        let len = agr_buff.len();
+        let agr = NDArray::from_mut_slice(&mut agr_buff, [len])?;
+        log_norm = log_norm + unsafe { normalize(agr) };
+      }
+      prev_idx = *idx;
+    }
+    if prev_idx != -1
+      {
+        if let Some(ker_buff) = kernels.last_mut()
+        {
+          let left_bond = *left_bonds.last().unwrap();
+          let mode_dim = *mode_dims.last().unwrap();
+          let right_bond = right_bonds.pop().unwrap();
+          let agr = NDArray::from_slice(&agr_buff, [right_bond, 1])?;
+          let ker = NDArray::from_slice(ker_buff, [left_bond * mode_dim, right_bond])?;
+          let mut new_ker_buff = unsafe { T::uninit_buff(left_bond * mode_dim) };
+          let new_ker = NDArray::from_mut_slice(&mut new_ker_buff, [left_bond * mode_dim, 1])?;
+          unsafe { new_ker.matmul_inplace(ker, agr)? };
+          swap(ker_buff, &mut new_ker_buff);
+        } else {
+          return Err(TTError::EmptyTensorTrain);
+        }
+      }
+    let mut reduced_tt: Self = unsafe { TensorTrain::build_from_raw_parts(mode_dims, right_bonds, kernels) };
+    let mul = (log_norm / T::from(reduced_len).unwrap()).exp();
+    for (ker_buff, ..) in unsafe { reduced_tt.iter_mut() } {
+      let len = ker_buff.len();
+      let ker = NDArray::from_mut_slice(ker_buff, [len])?;
+      unsafe { ker.mul_by_scalar(mul) };
+    }
+    Ok(reduced_tt)
+  }
+
 
   /// Computes an element of a Tensor Train given the index.
   /// Returns the result as a tuple of two values: the first value v1 is the logarithm

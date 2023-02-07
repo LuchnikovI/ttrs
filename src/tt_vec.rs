@@ -465,4 +465,64 @@ use num_complex::{
     _test_reduced_sum::<Complex32>(mask, 1e-4 );
     _test_reduced_sum::<Complex64>(mask, 1e-10);
   }
+
+  #[inline]
+  fn _test_partial_eval<T>(index: [usize; 25], mask: [bool; 25], acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let mode_dims = vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3, 4, 5, 6, 5, 4, 3, 4, 5, 6, 7, 6, 5, 4];
+    let partial_index: Vec<isize> = index.into_iter().zip(mask).map(|(x, p)| if p { -1 } else { x as isize }).collect();
+    let rest_index: Vec<usize> = index.into_iter().zip(mask).filter(|(_, p)| *p).map(|(x, _)| x).collect();
+    let reduced_mode_dims: Vec<_> = mode_dims.iter().zip(mask).filter(|(_, p)| *p).map(|(x, _)| *x).collect();
+    let tt = TTVec::<T>::new_random(vec![2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3, 4, 5, 6, 5, 4, 3, 4, 5, 6, 7, 6, 5, 4], 35);
+    let reduced_tt = tt.partial_eval(&partial_index).unwrap();
+    assert_eq!(reduced_tt.get_mode_dims(), &reduced_mode_dims);
+    let (reduced_log_abs, reduced_phase) = reduced_tt.log_eval_index(&rest_index).unwrap();
+    let (log_abs, phase) = tt.log_eval_index(&index).unwrap();
+    assert!((reduced_log_abs - log_abs).abs() < acc);
+    assert!((phase - reduced_phase).abs() < acc);
+  }
+
+  #[test]
+  fn test_partial_eval() {
+    let index = [1, 2, 0, 4, 3, 2, 3, 0, 1, 0, 1, 2, 2, 3, 5, 2, 3, 2, 1, 4, 5, 2, 1, 3, 3];
+    let mask = [
+      true, true, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, true,
+    ];
+    _test_partial_eval::<f32>(      index, mask, 1e-4 );
+    _test_partial_eval::<f64>(      index, mask, 1e-10);
+    _test_partial_eval::<Complex32>(index, mask, 1e-4 );
+    _test_partial_eval::<Complex64>(index, mask, 1e-10);
+    let mask = [
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, true,
+    ];
+    _test_partial_eval::<f32>(      index, mask, 1e-4 );
+    _test_partial_eval::<f64>(      index, mask, 1e-10);
+    _test_partial_eval::<Complex32>(index, mask, 1e-4 );
+    _test_partial_eval::<Complex64>(index, mask, 1e-10);
+    let mask = [
+      true, true, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, false,
+    ];
+    _test_partial_eval::<f32>(      index, mask, 1e-4 );
+    _test_partial_eval::<f64>(      index, mask, 1e-10);
+    _test_partial_eval::<Complex32>(index, mask, 1e-4 );
+    _test_partial_eval::<Complex64>(index, mask, 1e-10);
+    let mask = [
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, true, false, false, false, true, true, true, false,
+      false, true, false, false, false,
+    ];
+    _test_partial_eval::<f32>(      index, mask, 1e-4 );
+    _test_partial_eval::<f64>(      index, mask, 1e-10);
+    _test_partial_eval::<Complex32>(index, mask, 1e-4 );
+    _test_partial_eval::<Complex64>(index, mask, 1e-10);
+  }
 }
