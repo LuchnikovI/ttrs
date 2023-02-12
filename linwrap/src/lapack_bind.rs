@@ -172,6 +172,85 @@ extern "C" {
   ungqr!(sorgqr_, f32);
 }
 
+macro_rules! heev {
+  ($fn_name:ident, $complex_type:ty, $real_type:ty) => {
+    fn $fn_name
+    (
+      jobz:  *const c_char,
+      uplo:  *const c_char,
+      n:     *const c_int,
+      a:     *mut   $complex_type,
+      lda:   *const c_int,
+      w:     *mut   $real_type,
+      work:  *mut   $complex_type,
+      lwork: *const c_int,
+      rwork: *mut   $real_type,
+      info:  *mut   c_int,
+    );
+  };
+}
+
+extern "C" {
+  heev!(cheev_, Complex32, f32);
+  heev!(zheev_, Complex64, f64);
+}
+
+macro_rules! syev {
+  ($fn_name:ident, $type:ty) => {
+    fn $fn_name
+    (
+      jobz:  *const c_char,
+      uplo:  *const c_char,
+      n:     *const c_int,
+      a:     *mut   $type,
+      lda:   *const c_int,
+      w:     *mut   $type,
+      work:  *mut   $type,
+      lwork: *const c_int,
+      info:  *mut   c_int,
+    );
+  };
+}
+
+extern "C" {
+  syev!(ssyev_, f32);
+  syev!(dsyev_, f64);
+}
+
+#[inline]
+unsafe fn sheev_(
+  jobz:  *const c_char,
+  uplo:  *const c_char,
+  n:     *const c_int,
+  a:     *mut   f32,
+  lda:   *const c_int,
+  w:     *mut   f32,
+  work:  *mut   f32,
+  lwork: *const c_int,
+  _:     *mut   f32,
+  info:  *mut   c_int,
+)
+{
+  ssyev_(jobz, uplo, n, a, lda, w, work, lwork, info);
+}
+
+#[inline]
+unsafe fn dheev_(
+  jobz:  *const c_char,
+  uplo:  *const c_char,
+  n:     *const c_int,
+  a:     *mut   f64,
+  lda:   *const c_int,
+  w:     *mut   f64,
+  work:  *mut   f64,
+  lwork: *const c_int,
+  _:     *mut   f64,
+  info:  *mut   c_int,
+)
+{
+  dsyev_(jobz, uplo, n, a, lda, w, work, lwork, info);
+}
+
 /*macro_rules! ungrq {
   ($fn_name:ident, $type_name:ident) => {
     pub(super) fn $fn_name
@@ -255,12 +334,24 @@ pub trait Lapack: ComplexFloat
     lwork: *const c_int,
     info:  *mut   c_int,
   );
+  unsafe fn heev(
+    jobz:  *const c_char,
+    uplo:  *const c_char,
+    n:     *const c_int,
+    a:     *mut   Self,
+    lda:   *const c_int,
+    w:     *mut   Self::Real,
+    work:  *mut   Self,
+    lwork: *const c_int,
+    rwork: *mut   Self::Real,
+    info:  *mut   c_int,
+  );
 }
 
 // ----------------------------------------- Externs impls ----------------------------------------- //
 
 macro_rules! impl_lapack {
-    ($type:ty, $getrf:ident, $gesv:ident, $gesvd:ident, $geqrf:ident, $ungqr:ident) => {
+    ($type:ty, $getrf:ident, $gesv:ident, $gesvd:ident, $geqrf:ident, $ungqr:ident, $heev:ident) => {
       impl Lapack for $type {
         #[inline]
         unsafe fn getrf(
@@ -338,11 +429,27 @@ macro_rules! impl_lapack {
         {
           $ungqr(m, n, k, a, lda, tau, work, lwork, info);
         }
+        #[inline]
+        unsafe fn heev(
+          jobz:  *const c_char,
+          uplo:  *const c_char,
+          n:     *const c_int,
+          a:     *mut   Self,
+          lda:   *const c_int,
+          w:     *mut   Self::Real,
+          work:  *mut   Self,
+          lwork: *const c_int,
+          rwork: *mut   Self::Real,
+          info:  *mut   c_int,
+        )
+        {
+          $heev(jobz, uplo, n, a, lda, w, work, lwork, rwork, info);
+        }
       }
     };
 }
 
-impl_lapack!(f32,       sgetrf_, sgesv_, sgesvd_, sgeqrf_, sorgqr_);
-impl_lapack!(f64,       dgetrf_, dgesv_, dgesvd_, dgeqrf_, dorgqr_);
-impl_lapack!(Complex32, cgetrf_, cgesv_, cgesvd_, cgeqrf_, cungqr_);
-impl_lapack!(Complex64, zgetrf_, zgesv_, zgesvd_, zgeqrf_, zungqr_);
+impl_lapack!(f32,       sgetrf_, sgesv_, sgesvd_, sgeqrf_, sorgqr_, sheev_);
+impl_lapack!(f64,       dgetrf_, dgesv_, dgesvd_, dgeqrf_, dorgqr_, dheev_);
+impl_lapack!(Complex32, cgetrf_, cgesv_, cgesvd_, cgeqrf_, cungqr_, cheev_);
+impl_lapack!(Complex64, zgetrf_, zgesv_, zgesvd_, zgeqrf_, zungqr_, zheev_);

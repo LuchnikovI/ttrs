@@ -67,7 +67,7 @@ impl Debug for SparseLinalgError {
 // ---------------------------------------------------------------------- //
 
 pub unsafe fn sparse_eigensolve<T>(
-    op: &impl Fn(NDArray<*const T, 1>, NDArray<*mut T, 1>),
+    op: &mut impl FnMut(NDArray<*const T, 1>, NDArray<*mut T, 1>),
     mode: Which,
     tol: T::Real,
     maxiter: usize,
@@ -216,7 +216,7 @@ mod tests {
         let mut eigvals_buff = T::random_normal(nev);
         let eigvecs = NDArray::from_mut_slice(&mut eigvecs_buff, [n, nev]).unwrap();
         let eigvals = NDArray::from_mut_slice(&mut eigvals_buff, [nev]).unwrap();
-        let op = |src: NDArray<*const T, 1>, dst: NDArray<*mut T, 1>| {
+        let mut op = |src: NDArray<*const T, 1>, dst: NDArray<*mut T, 1>| {
             unsafe {
                 dst.reshape([n as usize, 1]).unwrap()
                 .matmul_inplace(
@@ -228,7 +228,7 @@ mod tests {
         };
         unsafe {
             sparse_eigensolve(
-                &op,
+                &mut op,
                 which,
                 acc,
                 10000,

@@ -147,6 +147,11 @@ impl<Ptr, const N: usize> NDArray<Ptr, N>
 where
   Ptr: PointerExt + 'static,
 {
+  /// Returns pointer
+  pub fn get_ptr(&self) -> Ptr {
+    self.ptr
+  }
+
   /// This method splits an array into two sub-arrays across a given axis.
   /// It returns two arrays: the first one is for witch the given axis range is from 0 to size,
   /// the second one is for witch the given axis range is from size to the end.

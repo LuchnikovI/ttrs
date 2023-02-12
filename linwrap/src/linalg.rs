@@ -53,6 +53,9 @@ pub enum LapackError {
 
   /// This error appears when ?getrs lapack subroutine fails.
   ErrorGETRS(c_int),
+
+  /// This error appears when ?heev of ?syev lapack subroutine fails.
+  ErrorHEEV(c_int)
 }
 
 impl Into<NDArrayError> for LapackError {
@@ -70,6 +73,7 @@ impl Debug for LapackError {
       Self::ErrorORGQR(code) => { f.write_str(&format!("Lapack routine for QR decomposition result postprocessing (?ORGQR) failed with code {}", code)) },
       Self::ErrorGETRF(code) => { f.write_str(&format!("Lapack routine ?GETRF failed with code {}", code)) },
       Self::ErrorGETRS(code) => { f.write_str(&format!("Lapack routine ?GETRS failed with code {}", code)) },
+      Self::ErrorHEEV(code) => { f.write_str(&format!("Lapack routine ?HEEV or ?SYEV failed with code {}", code)) },
     }
   }
 }
@@ -175,6 +179,57 @@ where
       if info != 0 { return Err(LapackError::ErrorGESV(info).into()); }
       Ok(())
     }
+  
+  pub unsafe fn eigh(
+    self,
+    lmbd: NDArray<*mut T::Real, 1>,
+  ) -> NDArrayResult<()>
+  {
+    if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    if self.strides[1] < self.shape[0] { return Err(NDArrayError::MutableElementsOverlapping); }
+    if lmbd.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
+    let jobz = 'V' as c_char;
+    let uplo = 'U' as c_char;
+    let n = self.shape[1] as c_int;
+    let lda = self.strides[1] as c_int;
+    let lwork = -1  as c_int;
+    let mut work = T::zero();
+    let mut rwork = Vec::with_capacity(std::cmp::max(1, 3 * n as usize - 2));
+    unsafe { rwork.set_len(std::cmp::max(1, 3 * n as usize - 2)); }
+    let mut info = 0;
+    unsafe {
+      T::heev(
+        &jobz,
+        &uplo,
+        &n,
+        self.ptr,
+        &lda,
+        lmbd.ptr,
+        &mut work,
+        &lwork,
+        rwork.as_mut_ptr(),
+        &mut info,
+      )
+    }
+    let lwork: c_int = ToPrimitive::to_i32(&work.re()).unwrap() as c_int;
+    let mut work: Vec<T> = Vec::with_capacity(lwork as usize);
+    unsafe {
+      T::heev(
+        &jobz,
+        &uplo,
+        &n,
+        self.ptr,
+        &lda,
+        lmbd.ptr,
+        work.as_mut_ptr(),
+        &lwork,
+        rwork.as_mut_ptr(),
+        &mut info,
+      )
+    }
+    if info != 0 { return Err(LapackError::ErrorHEEV(info).into()); }
+    Ok(())
+  }
 
   /// This method performs computation of the SVD of self matrix.
   /// The result is written in u, lmbd and vdag arrays.
@@ -570,6 +625,42 @@ mod tests {
       _test_solve::<f64>(      (10, 15), 1e-10);
       _test_solve::<Complex32>((10, 15), 1e-5 );
       _test_solve::<Complex64>((10, 15), 1e-10);
+    }
+  }
+
+  #[inline]
+  unsafe fn _test_eigh<T>(m: usize, acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let mut buff_a = T::random_normal(m * m);
+    let mut buff_a_conj = buff_a.clone();
+    let mut buff_aux = T::random_normal(m * m);
+    let a = NDArray::from_mut_slice(buff_a.as_mut_slice(), [m, m]).unwrap();
+    let a_h = NDArray::from_mut_slice(buff_a_conj.as_mut_slice(), [m, m]).unwrap().transpose([1, 0]).unwrap();
+    a_h.conj();
+    let aux = NDArray::from_mut_slice(buff_aux.as_mut_slice(), [m, m]).unwrap();
+    a.add_inpl(a_h).unwrap();
+    a.write_to(a_h).unwrap();
+    let mut lmbd_buff: Vec<T::Real> = T::Real::uninit_buff(m);
+    let lmbd = NDArray::from_mut_slice(&mut lmbd_buff, [m]).unwrap();
+    a.eigh(lmbd).unwrap();
+    let mut lmbd_buff: Vec<T> = lmbd_buff.into_iter().map(|x| T::from(x).unwrap()).collect();
+    let lmbd = NDArray::from_mut_slice(&mut lmbd_buff, [1, m]).unwrap();
+    aux.matmul_inplace(a_h, a).unwrap();
+    a.mul_inpl(lmbd).unwrap();
+    aux.sub_inpl(a).unwrap();
+    assert!(aux.norm_n_pow_n(2).abs() < acc);
+  }
+
+  #[test]
+  fn test_eigh() {
+    unsafe {
+      _test_eigh::<f32>(      20, 1e-5 );
+      _test_eigh::<f64>(      20, 1e-10);
+      _test_eigh::<Complex32>(20, 1e-5 );
+      _test_eigh::<Complex64>(20, 1e-10);
     }
   }
 
