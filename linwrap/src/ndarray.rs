@@ -147,12 +147,23 @@ impl<Ptr, const N: usize> NDArray<Ptr, N>
 where
   Ptr: PointerExt + 'static,
 {
+
+  /// Returns shape of an array
+  pub fn get_shape(&self) -> [usize; N] {
+    self.shape
+  }
+
+  /// Returns strides of an array
+  pub fn get_strides(&self) -> [usize; N] {
+    self.strides
+  }
+
   /// Returns pointer
   pub fn get_ptr(&self) -> Ptr {
     self.ptr
   }
 
-  /// This method splits an array into two sub-arrays across a given axis.
+  /// Splits an array into two sub-arrays across a given axis.
   /// It returns two arrays: the first one is for witch the given axis range is from 0 to size,
   /// the second one is for witch the given axis range is from size to the end.
   /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same

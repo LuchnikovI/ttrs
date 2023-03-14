@@ -187,6 +187,7 @@ use num_complex::{
     Complex32,
     Complex64,
   };
+  use num_traits::Zero;
   use crate::tt_traits::TensorTrain;
   use super::*;
 
@@ -524,5 +525,64 @@ use num_complex::{
     _test_partial_eval::<f64>(      index, mask, 1e-10);
     _test_partial_eval::<Complex32>(index, mask, 1e-4 );
     _test_partial_eval::<Complex64>(index, mask, 1e-10);
+  }
+
+  fn _test_to_dens<T>(mode_dims: &[usize], acc: T::Real)
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let size = mode_dims.into_iter().product();
+    let mut rank = 1;
+    let mut lhs_dim = 1;
+    let mut rhs_dim = size;
+    for d in mode_dims {
+      rank = std::cmp::max(std::cmp::min(lhs_dim, rhs_dim), rank);
+      lhs_dim *= d;
+      rhs_dim /= d;
+    }
+    let arr = T::random_normal(size);
+    let f = |x: &[usize]| {
+      let mut idx = 0;
+      let mut stride = 1;
+      for (d, i) in mode_dims.into_iter().zip(x) {
+        idx += stride * i;
+        stride *= d;
+      }
+      arr[idx]
+    };
+    let (tt, _) = TTVec::ttcross(mode_dims, rank, T::Real::zero(), f, 10, false).unwrap();
+    let arr_from_tt = tt.to_dens();
+    arr.into_iter().zip(arr_from_tt).for_each(|(lhs, rhs)| {
+      assert!((lhs - rhs).abs() < acc);
+    });
+  }
+
+  #[test]
+  fn test_to_dens() {
+    _test_to_dens::<f32>      (&[2, 4, 2, 3, 1], 1e-5 );
+    _test_to_dens::<f64>      (&[2, 4, 2, 3, 1], 1e-10);
+    _test_to_dens::<Complex32>(&[2, 4, 2, 3, 1], 1e-5 );
+    _test_to_dens::<Complex64>(&[2, 4, 2, 3, 1], 1e-10);
+    _test_to_dens::<f32>      (&[2, 4, 2, 3, 2], 1e-5 );
+    _test_to_dens::<f64>      (&[2, 4, 2, 3, 2], 1e-10);
+    _test_to_dens::<Complex32>(&[2, 4, 2, 3, 2], 1e-5 );
+    _test_to_dens::<Complex64>(&[2, 4, 2, 3, 2], 1e-10);
+    _test_to_dens::<f32>      (&[1, 4, 2, 3, 2], 1e-5 );
+    _test_to_dens::<f64>      (&[1, 4, 2, 3, 2], 1e-10);
+    _test_to_dens::<Complex32>(&[1, 4, 2, 3, 2], 1e-5 );
+    _test_to_dens::<Complex64>(&[1, 4, 2, 3, 2], 1e-10);
+    _test_to_dens::<f32>      (&[1, 4, 2, 3, 1], 1e-5 );
+    _test_to_dens::<f64>      (&[1, 4, 2, 3, 1], 1e-10);
+    _test_to_dens::<Complex32>(&[1, 4, 2, 3, 1], 1e-5 );
+    _test_to_dens::<Complex64>(&[1, 4, 2, 3, 1], 1e-10);
+    _test_to_dens::<f32>      (&[1], 1e-5 );
+    _test_to_dens::<f64>      (&[1], 1e-10);
+    _test_to_dens::<Complex32>(&[1], 1e-5 );
+    _test_to_dens::<Complex64>(&[1], 1e-10);
+    _test_to_dens::<f32>      (&[1, 1, 1, 1], 1e-5 );
+    _test_to_dens::<f64>      (&[1, 1, 1, 1], 1e-10);
+    _test_to_dens::<Complex32>(&[1, 1, 1, 1], 1e-5 );
+    _test_to_dens::<Complex64>(&[1, 1, 1, 1], 1e-10);
   }
 }

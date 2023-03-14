@@ -1005,6 +1005,22 @@ where
     Ok(())
   }
 
+  /// Returns a Tensor Train as a contiguous in memory array
+  /// as if it is a tensor kept in memory in generalized fortran layout.
+  fn to_dens(&self) -> Vec<T> {
+    let mut result_buff: Vec<T> = vec![T::one()];
+    for (ker_buff, right_bond, left_bond, mode_dim) in self.iter() {
+      let lhs_left_dim = result_buff.len() / left_bond;
+      let result = NDArray::from_slice(&result_buff, [lhs_left_dim, left_bond]).unwrap(); 
+      let mut tmp_buff = unsafe { T::uninit_buff(lhs_left_dim * mode_dim * right_bond) };
+      let tmp = NDArray::from_mut_slice(&mut tmp_buff, [lhs_left_dim, right_bond * mode_dim]).unwrap();
+      let ker = NDArray::from_slice(ker_buff, [left_bond, right_bond * mode_dim]).unwrap();
+      unsafe { tmp.matmul_inplace(result, ker).unwrap() };
+      swap(&mut result_buff, &mut tmp_buff);
+    }
+    result_buff
+  }
+
   /// This method is the combination of the optimization methods
   /// (1) <https://arxiv.org/abs/2101.03377> and (2) <https://arxiv.org/abs/2209.14808>
   /// The method (1) is essentially a power iteration method. It is being run first.

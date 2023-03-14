@@ -97,6 +97,31 @@ reduction_ops_to_array!(const, reduce_prod,    |x: *mut T, y: *const T| *x = *x 
 reduction_ops_to_array!(mut,   reduce_abs_max, |x: *mut T, y: *const T| *x = max_abs(*x, *y));
 reduction_ops_to_array!(const, reduce_abs_max, |x: *mut T, y: *const T| *x = max_abs(*x, *y));
 
+macro_rules! trace {
+  ($ptr_type:ident) => {
+    impl<T> NDArray<*$ptr_type T, 2>
+    where
+      T: ComplexFloat + Sum + Send + Sync + 'static,
+      <T as ComplexFloat>::Real: Send + Sync + PartialOrd,
+    {
+      pub unsafe fn trace(&self) -> T {
+        let mut t = T::zero();
+        let s1 = self.strides[0];
+        let s2 = self.strides[1];
+        let m = self.shape[0];
+        let n = self.shape[1];
+        for i in 0..(std::cmp::min(m, n)) {
+          t = t + *self.ptr.add(s1 * i + s2 * i);
+        }
+        t
+      }
+    }
+  }
+}
+
+trace!(mut  );
+trace!(const);
+
 // ---------------------------------------------------------------------- //
 
 #[cfg(test)]
