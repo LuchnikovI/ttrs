@@ -1,3 +1,4 @@
+use linwrap::{NDArray, init_utils::BufferGenerator};
 use pyo3::{
     prelude::*,
     exceptions::PyRuntimeError,
@@ -47,6 +48,39 @@ impl TTVc64 {
     #[new]
     fn new(mode_dims: Vec<usize>, rank: usize, delta: f64, tt_opt: bool) -> Self {
         Self (CrossBuilder::new(rank, delta, &mode_dims, tt_opt))
+    }
+
+    /// Sets Tensor Train from a list of kernels.
+    /// Note: if list of kernels is inconsistent it leads to UB. 
+    fn from_kernels(&mut self, kernels: Vec<&PyArray3<Complex64>>) {
+        let iter = unsafe { self.0.tt.iter_mut() }.zip(kernels);
+        for ((ker_dst, right_bond_dst, left_bond_dst, mode_dim_dst), ker_src) in iter {
+            let left_bond_src = ker_src.shape()[0];
+            let mode_dim_src = ker_src.shape()[1];
+            let right_bond_src = ker_src.shape()[2];
+            let mut new_ker_buff = unsafe { Complex64::uninit_buff(left_bond_src * mode_dim_src * right_bond_src) };
+            let new_ker = NDArray::from_mut_slice(&mut new_ker_buff, [left_bond_src, mode_dim_src, right_bond_src]).unwrap();
+            let new_ker = new_ker.transpose([2, 1, 0]).unwrap();
+            unsafe {
+                for (lhs, rhs) in new_ker.into_f_iter().zip(ker_src.as_slice().unwrap()) {
+                    *(lhs.0) = *rhs;
+                }
+            }
+            *left_bond_dst = left_bond_src;
+            *mode_dim_dst = mode_dim_src;
+            *right_bond_dst = right_bond_src;
+            std::mem::swap(ker_dst, &mut new_ker_buff);
+        }
+    }
+
+    /// Restricts the exploration indices by a class where for each index one has not more than n non-zero elements.
+    /// E.g. if one sets n = 2, then [0, 1, 0, 2, 0] is accepted, while [0, 1, 3, 2, 0] is not.
+    /// This is useful when one needs to reconstruct a quantum state from a set of correlation functions whit restricted
+    /// number of points.
+    /// Args:
+    ///     n (int): maximal number of non-zero elements
+    fn restrict(&mut self, n: usize) -> PyResult<()> {
+        self.0.restrict(n).map_err(|e| PyRuntimeError::new_err(format!("{:?}", e)))
     }
 
     /// Returns a list with dimensions of bonds

@@ -1,12 +1,14 @@
 use num_complex::{
     Complex32,
-    Complex64, ComplexFloat,
+    Complex64,
+    ComplexFloat,
 };
 use std::ffi::{
     c_int,
     c_char,
 };
 
+// This is only for Complex valued tensors.
 // TODO?: Add Lanczos method for real valued symmetric matrices.
 
 macro_rules! impl_naupd {

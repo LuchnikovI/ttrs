@@ -3,6 +3,7 @@ mod tt_cross;
 mod utils;
 mod tt_vec;
 mod pytt_vec;
+mod mutli_indices;
 
 pub use tt_vec::TTVec;
 pub use tt_cross::CrossBuilder;

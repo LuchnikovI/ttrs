@@ -1,10 +1,7 @@
 use num_traits::Float;
 use num_complex::ComplexFloat;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
-use rayon::iter::ParallelIterator;
-//use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+
+use crate::mutli_indices::MultiIndices;
 
 pub(super) fn get_trunc_dim<T: Float>(lmbd: &[T], delta_local: T) -> usize
 {
@@ -45,6 +42,15 @@ pub(super) fn build_bonds(mode_dims: &[usize], rank: usize) -> (Vec<usize>, Vec<
   (bonds[..kers_num].to_owned(), bonds[1..].to_owned())
 }
 
+pub(super) fn argsort<T: ComplexFloat>(slice: &[T]) -> Vec<usize>
+where
+  T::Real: PartialOrd,
+{
+  let mut indices: Vec<_> = (0..(slice.len())).collect();
+  indices.sort_by(|i, j| unsafe { slice.get_unchecked(*j).abs().partial_cmp(&slice.get_unchecked(*i).abs()).unwrap() });
+  indices
+}
+
 pub(super) fn indices_prod(
   lhs: &[Vec<usize>],
   rhs: &[Vec<usize>],
@@ -63,112 +69,37 @@ pub(super) fn indices_prod(
   }).collect()
 }
 
-fn random_indices_subset(
-  indices: &[Vec<usize>],
-  subset_size: usize,
-) -> Vec<Vec<usize>>
+pub(super) fn get_restrictions(
+  indices: &MultiIndices,
+  n: usize,
+) -> (Vec<usize>, usize)
 {
-  let mut rng = thread_rng();
-  let indices_num = indices.len();
-  let mut order: Vec<_> = (0..indices_num).collect();
-  order.shuffle(&mut rng);
-  order.resize(subset_size, 0);
-  order.sort_unstable();
-  order.into_iter().map(|i| unsafe { indices.get_unchecked(i).to_owned() } ).collect()
-}
-
-pub(super) fn build_random_indices(
-  mode_dims: &[usize],
-  left_bonds: &[usize],
-  right_bonds: &[usize],
-) -> (Vec<Vec<Vec<usize>>>, Vec<Vec<Vec<usize>>>)
-{
-  let kers_num = mode_dims.len();
-  let mut all_left_indices = Vec::with_capacity(kers_num);
-  all_left_indices.push(vec![]);
-  let iter = mode_dims
-    .into_iter()
-    .zip(right_bonds.into_iter())
-    .take(kers_num-1);
-  for (dim, right_bond) in iter {
-    let left_indices_ref = all_left_indices.last_mut().unwrap();
-    let cur_indices: Vec<Vec<_>> = (0..*dim).map(|x| vec![x]).collect();
-    let left_new_indices = indices_prod(left_indices_ref, &cur_indices);
-    let left_new_indices = random_indices_subset(&left_new_indices, *right_bond);
-    all_left_indices.push(left_new_indices);
+  let mut forbidden = Vec::new();
+  let mut must_have = 0;
+  for (i, index) in indices.into_iter().enumerate() {
+    let nonzeros = index.into_iter().filter(|x| **x != 0 ).count();
+    if nonzeros > n {
+      forbidden.push(i);
+    }
+    if nonzeros == 0 {
+      must_have = i;
+    }
   }
-  let mut all_right_indices = vec![vec![]; kers_num];
-  all_right_indices[kers_num-1] = vec![];
-  let iter = mode_dims
-    .into_iter().rev()
-    .enumerate()
-    .zip(left_bonds.into_iter().rev())
-    .take(kers_num-1);
-  for ((length, dim), left_bond) in iter {
-    let right_indices_ref = &mut all_right_indices[kers_num - 1 - length];
-    let cur_indices: Vec<Vec<_>> = (0..*dim).map(|x| vec![x]).collect();
-    let right_new_indices = indices_prod(&cur_indices, right_indices_ref);
-    let right_new_indices = random_indices_subset(&right_new_indices, *left_bond);
-    all_right_indices[kers_num - 2 - length] = right_new_indices;
-  }
-  (all_left_indices, all_right_indices)
-}
-
-#[inline]
-pub(super) fn get_indices_iter(
-  first_indices: &[Vec<usize>],
-  last_indices: &[Vec<usize>],
-  is_reverse:bool,
-) -> impl IndexedParallelIterator<Item = Vec<usize>> 
-{
-  let first_indices = if first_indices.is_empty() { vec![vec![]] } else { first_indices.to_owned() };
-  let last_indices = if last_indices.is_empty() { vec![vec![]] } else { last_indices.to_owned() };
-  let first_size = first_indices.len();
-  let last_size = last_indices.len();
-  let size = first_size * last_size;
-  (0..size).into_par_iter()
-    .map(move |mut idx| {
-      let first_i = idx % first_size;
-      idx /= first_size;
-      let last_i = idx % last_size;
-      if !is_reverse {
-        unsafe {
-          first_indices.get_unchecked(first_i).into_iter().map(|x| *x)
-            .chain(
-              last_indices.get_unchecked(last_i).into_iter().map(|x| *x)
-            )
-            .collect()
-        }
-      } else {
-        unsafe {
-          last_indices.get_unchecked(last_i).into_iter().map(|x| *x)
-          .chain(
-            first_indices.get_unchecked(first_i).into_iter().map(|x| *x)
-          )
-          .collect()
-        }
-      }
-    })
-}
-
-pub(super) fn argsort<T: ComplexFloat>(slice: &[T]) -> Vec<usize>
-where
-  T::Real: PartialOrd,
-{
-  let mut indices: Vec<_> = (0..(slice.len())).collect();
-  indices.sort_by(|i, j| unsafe { slice.get_unchecked(*j).abs().partial_cmp(&slice.get_unchecked(*i).abs()).unwrap() });
-  indices
+  (forbidden, must_have)
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{get_trunc_dim, build_bonds, indices_prod, build_random_indices, get_indices_iter, argsort};
+  use super::{
+    get_trunc_dim,
+    build_bonds,
+    argsort,
+  };
   use linwrap::init_utils::BufferGenerator;
   use num_complex::{
     Complex64,
     ComplexFloat,
   };
-  use rayon::iter::ParallelIterator;
   #[test]
   fn test_get_trunc_dim() {
     let lmbd = [10., 9., 8., 7., 6., 5., 4., 3., 2., 1.];
@@ -193,113 +124,6 @@ mod tests {
     let (left_bonds, right_bonds) = build_bonds(&mode_dims, rank);
     assert_eq!(&left_bonds[..], &[1, 2, 2, 6, 24, 30, 30, 30, 30, 30, 30, 16, 4, 2]);
     assert_eq!(&right_bonds[..], &[2, 2, 6, 24, 30, 30, 30, 30, 30, 30, 16, 4, 2, 1]);
-  }
-
-  #[test]
-  fn test_indices_prod() {
-    let lhs = vec![
-      vec![1, 2, 3, 4, 5],
-      vec![2, 3, 4, 5, 6],
-      vec![6, 5, 4, 3, 2],
-      vec![1, 1, 2, 2, 3],
-    ];
-    let rhs = vec![
-      vec![11, 12, 13],
-      vec![14, 15, 16],
-    ];
-    let result = vec![
-      vec![1, 2, 3, 4, 5, 11, 12, 13],
-      vec![2, 3, 4, 5, 6, 11, 12, 13],
-      vec![6, 5, 4, 3, 2, 11, 12, 13],
-      vec![1, 1, 2, 2, 3, 11, 12, 13],
-      vec![1, 2, 3, 4, 5, 14, 15, 16],
-      vec![2, 3, 4, 5, 6, 14, 15, 16],
-      vec![6, 5, 4, 3, 2, 14, 15, 16],
-      vec![1, 1, 2, 2, 3, 14, 15, 16],
-    ];
-    assert_eq!(result, indices_prod(&lhs, &rhs));
-  }
-
-  fn test_build_random_indices_(mode_dims: &[usize]) {
-    let (left_bonds, right_bonds) = build_bonds(mode_dims, 15);
-    let (all_left_indices, all_right_indices) = build_random_indices(mode_dims, &left_bonds, &right_bonds);
-    assert_eq!(all_left_indices.len(), mode_dims.len());
-    assert_eq!(all_right_indices.len(), mode_dims.len());
-    let iter = mode_dims.into_iter().zip(&all_left_indices[1..]).zip(&left_bonds[1..]);
-    for ((dim, left_indices), left_bond) in iter {
-      assert_eq!(*left_bond, left_indices.len());
-      for left_index in left_indices {
-        assert!(*left_index.last().unwrap() < *dim);
-      }
-    }
-    let iter = mode_dims.into_iter().rev().zip(all_right_indices.iter().rev().skip(1)).zip(right_bonds.iter().rev().skip(1));
-    for ((dim, right_indices), right_bond) in iter {
-      assert_eq!(*right_bond, right_indices.len());
-      for right_index in right_indices {
-        assert!(right_index[0] < *dim);
-      }
-    }
-  }
-
-  #[test]
-  fn test_build_random_indices() {
-    test_build_random_indices_(&[1]);
-    test_build_random_indices_(&[5]);
-    test_build_random_indices_(&[1, 1, 1, 1]);
-    test_build_random_indices_(&[2, 3, 1, 2, 3, 5, 6, 3, 2, 1, 2, 3, 4, 6, 7]);
-  }
-
-  #[test]
-  fn test_get_indices_iter() {
-    let first = vec![
-      vec![0, 1, 2, 3],
-      vec![3, 2, 1, 0],
-      vec![1, 1, 1, 1],
-    ];
-    let last = vec![
-      vec![1, 1, 1],
-      vec![2, 2, 2],
-    ];
-    let true_indices = vec![
-      vec![0, 1, 2, 3, 1, 1, 1],
-      vec![3, 2, 1, 0, 1, 1, 1],
-      vec![1, 1, 1, 1, 1, 1, 1],
-      vec![0, 1, 2, 3, 2, 2, 2],
-      vec![3, 2, 1, 0, 2, 2, 2],
-      vec![1, 1, 1, 1, 2, 2, 2],
-    ];
-    let indices: Vec<_> = get_indices_iter(&first, &last, false).collect();
-    assert_eq!(&true_indices, &indices);
-    let true_indices = vec![
-      vec![1, 1, 1, 0, 1, 2, 3],
-      vec![1, 1, 1, 3, 2, 1, 0],
-      vec![1, 1, 1, 1, 1, 1, 1],
-      vec![2, 2, 2, 0, 1, 2, 3],
-      vec![2, 2, 2, 3, 2, 1, 0],
-      vec![2, 2, 2, 1, 1, 1, 1],
-    ];
-    let indices: Vec<_> = get_indices_iter(&first, &last, true).collect();
-    assert_eq!(&true_indices, &indices);
-    let first = vec![
-    ];
-    let last = vec![
-      vec![1, 1, 1, 5],
-      vec![2, 2, 2, 5],
-      vec![3, 2, 1, 4],
-    ];
-    let true_indices = last.clone();
-    let indices: Vec<_> = get_indices_iter(&first, &last, true).collect();
-    assert_eq!(&true_indices, &indices);
-    let last = vec![
-      ];
-      let first = vec![
-        vec![1, 1, 1, 5],
-        vec![2, 2, 2, 5],
-        vec![3, 2, 1, 4],
-      ];
-      let true_indices = first.clone();
-      let indices: Vec<_> = get_indices_iter(&first, &last, true).collect();
-      assert_eq!(&true_indices, &indices);
   }
 
   #[test]

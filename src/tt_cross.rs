@@ -10,16 +10,16 @@ use linwrap::{
 };
 
 use crate::TensorTrain;
-use crate::utils::{
-  build_random_indices,
-  indices_prod,
-  get_indices_iter,
+use crate::mutli_indices::{
+  MultiIndicesSet,
+  MultiIndices,
+  indices_par_iter,
 };
-
 use crate::tt_traits::{
   TTResult,
   TTError,
 };
+use crate::utils::get_restrictions;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 enum DMRGState {
@@ -34,13 +34,14 @@ where
   T::Real: LinalgReal,
 {
   pub(super) tt: TT,
-  left_indices: Vec<Vec<Vec<usize>>>,
-  right_indices: Vec<Vec<Vec<usize>>>,
+  indices: MultiIndicesSet,
   cur_ker: usize,
   dmrg_state: DMRGState,
   delta: T::Real,
   argabsmax: Option<Vec<usize>>,
   absmax: Option<T>,
+  restriction: usize,
+  rank: usize,
 }
 
 impl<T, TT: TensorTrain<T>> CrossBuilder<T, TT>
@@ -66,20 +67,44 @@ where
   ) -> Self
   {
     let tt = TT::new_random(mode_dims.to_owned(), rank);
-    let (left_indices, right_indices) = build_random_indices(mode_dims, tt.get_left_bonds(), tt.get_right_bonds());
+    let indices = MultiIndicesSet::build_random(mode_dims, rank, usize::MAX);
     let absmax = if tt_opt { Some(T::zero()) } else { None };
     let argabsmax = if tt_opt { Some(vec![0; mode_dims.len()]) } else { None };
     Self {
       tt,
-      left_indices,
-      right_indices,
+      indices,
       cur_ker: 0,
       dmrg_state: DMRGState::ToRight,
       delta,
       argabsmax,
       absmax,
+      restriction: usize::MAX,
+      rank,
     }
   }
+
+  /// Restricts the exploration indices by a class where for each index one has not more than n non-zero elements.
+  /// E.g. if one sets n = 2, then [0, 1, 0, 2, 0] is accepted, while [0, 1, 3, 2, 0] is not.
+  /// This is useful when one needs to reconstruct a quantum state from a set of correlation functions whit restricted
+  /// number of points.
+  pub fn restrict(&mut self, n: usize) -> TTResult<()>
+  {
+    if n % 2 != 1 || n < 3 { return Err(TTError::Other("n must be odd and >= 3.")); }
+    self.restriction = n;
+    let indices = MultiIndicesSet::build_random(self.tt.get_mode_dims(), self.rank, (n - 1) / 2);
+    let (left_bonds, right_bonds) = indices.get_bonds();
+    for ((ker, old_right_bond, old_left_bond, mode_dim), (new_left_bond, new_right_bond)) 
+    in unsafe { self.tt.iter_mut() }.zip(left_bonds.into_iter().zip(right_bonds))
+    {
+      let mut new_ker = T::random_normal(*mode_dim * new_left_bond * new_right_bond);
+      std::mem::swap(&mut new_ker, ker);
+      *old_left_bond = new_left_bond;
+      *old_right_bond = new_right_bond;
+    }
+    self.indices = indices;
+    Ok(())
+  }
+
   /// Turns a TTCross builder into the corresponding Tensor Train.
   #[inline]
   pub fn to_tt(self) -> TT {
@@ -116,17 +141,14 @@ where
     let right_bond = self.tt.get_right_bonds()[cur_ker];
     match self.dmrg_state {
       DMRGState::ToRight => {
-        let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
-        let left_indices = indices_prod(&self.left_indices[cur_ker], &local_indices);
-        let iter = get_indices_iter(
-          &left_indices,
-          &self.right_indices[cur_ker],
-          false,
-        );
+        let local_indices = MultiIndices::new_one_side(dim);
+        let left_indices = self.indices[cur_ker].0.product(&local_indices);
+        let left_indices_len = left_indices.len();
+        let iter = indices_par_iter((left_indices, self.indices[cur_ker].1.clone()), false);
         if cur_ker == (self.tt.get_len() - 1) {
           Some(iter)
         } else {
-          if left_indices.len() == right_bond {
+          if left_indices_len == right_bond {
             None
           } else {
             Some(iter)
@@ -134,17 +156,14 @@ where
         }
       },
       DMRGState::ToLeft => {
-        let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
-        let right_indices = indices_prod(&local_indices, &self.right_indices[cur_ker]);
-        let iter = get_indices_iter(
-          &right_indices,
-          &self.left_indices[cur_ker],
-          true,
-        );
+        let local_indices = MultiIndices::new_one_side(dim);
+        let right_indices = local_indices.product(&self.indices[cur_ker].1);
+        let right_indices_len = right_indices.len();
+        let iter = indices_par_iter((self.indices[cur_ker].0.clone(), right_indices), true);
         if cur_ker == 0 {
           Some(iter)
         } else {
-          if right_indices.len() == left_bond {
+          if right_indices_len == left_bond {
             None
           } else {
             Some(iter)
@@ -186,15 +205,16 @@ where
               idx /= left_bond;
               let mid_idx = idx % dim;
               let rhs_idx = idx / dim;
-              *argabsmax = self.left_indices[cur_ker][lhs_idx].iter().chain(Some(&mid_idx)).chain(self.right_indices[cur_ker][rhs_idx].iter()).map(|x| *x).collect();
+              let (left_indices, right_indices) = self.indices[cur_ker].clone();
+              *argabsmax = left_indices.release()[lhs_idx].iter().chain(Some(&mid_idx)).chain(right_indices.release()[rhs_idx].iter()).map(|x| *x).collect();
             }
           }
           self.dmrg_state = DMRGState::ToLeft;
         } else {
           if left_bond * dim == right_bond {
-            let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
+            let local_indices = MultiIndices::new_one_side(dim);
             unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut T::eye(right_bond)[..]) };
-            self.left_indices[cur_ker + 1] = indices_prod(&self.left_indices[cur_ker], &local_indices);
+            self.indices[cur_ker + 1].0 = self.indices[cur_ker ].0.product(&local_indices);
             self.cur_ker += 1;
           } else {
             let iter = measurements.ok_or(TTError::EmptyUpdate)?;
@@ -207,14 +227,21 @@ where
                 idx /= left_bond;
                 let mid_idx = idx % dim;
                 let rhs_idx = idx / dim;
-                *argabsmax = self.left_indices[cur_ker][lhs_idx].iter().chain(Some(&mid_idx)).chain(self.right_indices[cur_ker][rhs_idx].iter()).map(|x| *x).collect();
+                let (left_indices, right_indices) = self.indices[cur_ker].clone();
+                *argabsmax = left_indices.release()[lhs_idx].iter().chain(Some(&mid_idx)).chain(right_indices.release()[rhs_idx].iter()).map(|x| *x).collect();
               }
             }
             let m = NDArray::from_mut_slice(&mut m_buff, [left_bond * dim, right_bond])?;
             let mut aux_buff = unsafe { T::uninit_buff(right_bond.pow(2)) };
             let aux = NDArray::from_mut_slice(&mut aux_buff, [right_bond, right_bond])?;
             unsafe { m.qr(aux)? };
-            let mut order = unsafe { m.maxvol(self.delta)? };
+            let mut order = if self.restriction != usize::MAX {
+              let left_indices = self.indices[cur_ker].0.product(&MultiIndices::new_one_side(dim));
+              let (forbidden, must_have) = get_restrictions(&left_indices, (self.restriction - 1) / 2);
+              unsafe { m.maxvol(self.delta, Some(&forbidden), Some(&[must_have]))? }
+            } else {
+              unsafe { m.maxvol(self.delta, None, None)? }
+            };
             let mut reverse_order = Vec::with_capacity(order.len());
             unsafe { reverse_order.set_len(order.len()) };
             order.iter().enumerate().for_each(|(i, x)| {
@@ -223,9 +250,9 @@ where
             let mut new_ker = unsafe { m.gen_f_array_from_axis_order(&reverse_order, 0).0 };
             unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut new_ker) };
             order.resize(right_bond, 0);
-            let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
-            let left_indices = indices_prod(&self.left_indices[cur_ker], &local_indices);
-            self.left_indices[cur_ker + 1] = order.into_iter().map(|i| left_indices[i].clone()).collect();
+            let local_indices = MultiIndices::new_one_side(dim);
+            let left_indices = self.indices[cur_ker].0.product(&local_indices).release();
+            self.indices[cur_ker + 1].0 = order.into_iter().map(|i| left_indices[i].clone()).collect::<Vec<Vec<_>>>().into();
             self.cur_ker += 1;
           }
         }
@@ -244,19 +271,20 @@ where
               idx /= dim;
               let rhs_idx = idx % right_bond;
               let lhs_idx = idx / right_bond;
-              *argabsmax = self.left_indices[cur_ker][lhs_idx].iter().chain(Some(&mid_idx)).chain(self.right_indices[cur_ker][rhs_idx].iter()).map(|x| *x).collect();
+              let (left_indices, right_indices) = self.indices[cur_ker].clone();
+              *argabsmax = left_indices.release()[lhs_idx].iter().chain(Some(&mid_idx)).chain(right_indices.release()[rhs_idx].iter()).map(|x| *x).collect();
             }
           }
           self.dmrg_state = DMRGState::ToRight;
         } else {
           if right_bond * dim == left_bond {
-            let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
+            let local_indices = MultiIndices::new_one_side(dim);
             unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut T::eye(left_bond)[..]) };
-            self.right_indices[cur_ker - 1] = indices_prod(&local_indices, &self.right_indices[cur_ker]);
+            self.indices[cur_ker - 1].1 = local_indices.product(&self.indices[cur_ker].1);
             self.cur_ker -= 1;
           } else {
-            let local_indices: Vec<Vec<usize>> = (0..dim).map(|x| vec![x]).collect();
-            let right_indices = indices_prod(&local_indices, &self.right_indices[cur_ker]);
+            let local_indices = MultiIndices::new_one_side(dim);
+            let right_indices = local_indices.product(&self.indices[cur_ker].1);
             let iter = measurements.ok_or(TTError::EmptyUpdate)?;
             let mut m_buff: Vec<_> = iter.collect();
             if let (Some(absmax), Some(argabsmax)) = (&mut self.absmax, &mut self.argabsmax)  {
@@ -267,14 +295,21 @@ where
                 idx /= dim;
                 let rhs_idx = idx % right_bond;
                 let lhs_idx = idx / right_bond;
-                *argabsmax = self.left_indices[cur_ker][lhs_idx].iter().chain(Some(&mid_idx)).chain(self.right_indices[cur_ker][rhs_idx].iter()).map(|x| *x).collect();
+                let (left_indices, right_indices) = self.indices[cur_ker].clone();
+                *argabsmax = left_indices.release()[lhs_idx].iter().chain(Some(&mid_idx)).chain(right_indices.release()[rhs_idx].iter()).map(|x| *x).collect();
               }
             }
             let m = NDArray::from_mut_slice(&mut m_buff, [right_bond * dim, left_bond])?;
             let mut aux_buff = unsafe { T::uninit_buff(left_bond.pow(2)) };
             let aux = NDArray::from_mut_slice(&mut aux_buff, [left_bond, left_bond])?;
             unsafe { m.qr(aux)? };
-            let mut order = unsafe { m.maxvol(self.delta)? };
+            let mut order = if self.restriction != usize::MAX {
+              let right_indices = MultiIndices::new_one_side(dim).product(&self.indices[cur_ker].1);
+              let (forbidden, must_have) = get_restrictions(&right_indices, (self.restriction - 1) / 2);
+              unsafe { m.maxvol(self.delta, Some(&forbidden), Some(&[must_have]))? }
+            } else {
+              unsafe { m.maxvol(self.delta, None, None)? }
+            };
             let mut reverse_order = Vec::with_capacity(order.len());
             unsafe { reverse_order.set_len(order.len()) };
             order.iter().enumerate().for_each(|(i, x)| {
@@ -283,7 +318,8 @@ where
             let mut new_ker = unsafe { m.transpose([1, 0])?.gen_f_array_from_axis_order(&reverse_order, 1).0 };
             unsafe { self.tt.get_kernels_mut()[cur_ker].as_mut().swap_with_slice(&mut new_ker) };
             order.resize(left_bond, 0);
-            self.right_indices[cur_ker - 1] = order.into_iter().map(|i| right_indices[i].clone()).collect();
+            let right_indices = right_indices.release();
+            self.indices[cur_ker - 1].1 = order.into_iter().map(|i| right_indices[i].clone()).collect::<Vec<Vec<_>>>().into();
             self.cur_ker -= 1;
           }
         }

@@ -22,9 +22,12 @@ use crate::{
     NDArrayResult,
     Layout,
   },
-  linalg_utils::triangular_split,
-    LinalgComplex,
-    LinalgReal,
+  linalg_utils::{
+    triangular_split,
+    maxvol_priority,
+  },
+  LinalgComplex,
+  LinalgReal,
 };
 
 // TODO: get advantage of the generalized storage (arbitrary strides).
@@ -477,12 +480,37 @@ where
   /// to be a dominant submatrix with accuracy delta. The self matrix is rewritten by the
   /// matrix that has reshaffeled rows according to the obtained rows order and
   /// multiplied by the inverse dominant part from the right.
+  /// It also allows to specify numbers of rows which must not be in the maxvol submatrix 
+  /// and numbers of rows that must be presented in the maxvol submatrix disregards its volume.
+  /// If those rows are specified, algorithm runs until further improvement is not possible, it does
+  /// not take into accaunt parameter `delta`.
   /// Safety: NDArray is a raw pointer with additional information. Thus, safety rules are the same
   /// as for raw pointers.
-  pub unsafe fn maxvol(self, delta: T::Real) -> NDArrayResult<Vec<usize>>
+  pub unsafe fn maxvol(
+    self,
+    delta: T::Real,
+    forbidden_rows: Option<&[usize]>,
+    must_have_rows: Option<&[usize]>,
+  ) -> NDArrayResult<Vec<usize>>
   {
     let m = self.shape[0];
     let n = self.shape[1];
+    let mut forbidden_mask = None;
+    let mut must_have_mask = None;
+    if let Some(s) = forbidden_rows {
+      let mut mask = vec![false; m];
+      for i in s {
+        mask[*i] = true;
+      }
+      std::mem::swap(&mut Some(mask), &mut forbidden_mask);
+    }
+    if let Some(s) = must_have_rows {
+      let mut mask = vec![false; m];
+      for i in s {
+        mask[*i] = true;
+      }
+      std::mem::swap(&mut Some(mask), &mut must_have_mask);
+    }
     if self.strides[0] != 1 { return Err(NDArrayError::FortranLayoutRequired); }
     if self.strides[1] < m { return Err(NDArrayError::MutableElementsOverlapping); }
     if m < n { return Err(NDArrayError::MaxvolInputSizeMismatch(m, n)); }
@@ -496,18 +524,35 @@ where
     let ipiv = self.maxvol_preprocess()?;
     for (i, j) in ipiv.into_iter().enumerate() {
       order.swap(i, j-1);
+      if let Some(mask) = forbidden_mask.as_deref_mut() {
+        mask.swap(i, j-1);
+      };
+      if let Some(mask) = must_have_mask.as_deref_mut() {
+        mask.swap(i, j-1);
+      };
     }
     let (a, b) = self.split_across_axis(0, n)?;
     unsafe { (0..(n * n)).into_iter().zip(a.into_f_iter()).for_each(|(i, x)| {
       if i % (n + 1) == 0 { *x.0 = T::one() } else { *x.0 = T::zero() }
     }) };
     let mut val;
+    let mut prev_val = T::from(f64::MAX).unwrap();
     let mut indices;
     loop {
-      (val, indices) = b.argmax();
+      (val, indices) = maxvol_priority(b.into(), must_have_mask.as_deref(), forbidden_mask.as_deref());
       let row_num = unsafe { *indices.get_unchecked(0) };
       let col_num = unsafe { *indices.get_unchecked(1) };
-      if val.abs() < delta + T::Real::one() { break; }
+      if must_have_mask.is_none() && forbidden_mask.is_none() {
+        if val.abs() < delta + T::Real::one() {
+          break;
+        }
+      } else {
+        if prev_val.abs() <= val.abs() && val != T::from(f64::MAX).unwrap() || val == T::zero() {
+          break;
+        } else {
+          prev_val = val;
+        }
+      }
       let bij = *b.at(indices)?;
       let col = b.subarray([0..(m - n), col_num..(col_num + 1)])?;
       let row = b.subarray([row_num..(row_num + 1), 0..n])?;
@@ -519,6 +564,12 @@ where
       *elem = *elem - T::one();
       b.rank1_update(x, y, -T::one() / bij)?;
       order.swap(col_num, row_num + n);
+      if let Some(mask) = forbidden_mask.as_deref_mut() {
+        mask.swap(col_num, row_num + n);
+      };
+      if let Some(mask) = must_have_mask.as_deref_mut() {
+        mask.swap(col_num, row_num + n);
+      };
     }
     Ok(order)
   }
@@ -541,6 +592,7 @@ mod tests {
   };
   use ndarray::Array;
   use ndarray_einsum_beta::einsum;
+  use num_traits::Zero;
 
   #[inline]
   unsafe fn _test_matmul_inplace<T>
@@ -887,7 +939,7 @@ mod tests {
     let a_buff_copy = a_buff.clone();
     let a = NDArray::from_mut_slice(&mut a_buff, [m, n]).unwrap();
     let a_copy = NDArray::from_slice(&a_buff_copy, [m, n]).unwrap();
-    let new_order = a.maxvol(delta).unwrap();
+    let new_order = a.maxvol(delta, None, None).unwrap();
     let (mut reordered_a_buff, _) = a_copy.transpose([1, 0]).unwrap().gen_f_array_from_axis_order(&new_order[..], 1);
     let reordered_a = NDArray::from_mut_slice(&mut reordered_a_buff, [n, m]).unwrap();
     let (lhs, rhs) = reordered_a.split_across_axis(1, n).unwrap();
@@ -915,6 +967,39 @@ mod tests {
       _test_maxvol::<f64>(      (120, 50), 0.  , 1e-10);
       _test_maxvol::<Complex32>((120, 50), 0.  , 1e-5 );
       _test_maxvol::<Complex64>((120, 50), 0.  , 1e-10);
+    }
+  }
+
+  #[inline]
+  unsafe fn _test_restricted_maxvol<T>(
+    size: (usize, usize),
+    must_have_rows: &[usize],
+    forbidden_rows: &[usize],
+  )
+  where
+    T: LinalgComplex,
+    T::Real: LinalgReal,
+  {
+    let (m, n) = size;
+    let mut a_buff = T::random_normal(m * n);
+    let a = NDArray::from_mut_slice(&mut a_buff, [m, n]).unwrap();
+    let new_order = a.maxvol(T::Real::zero(), Some(forbidden_rows), Some(must_have_rows)).unwrap();
+    let upper_part = &new_order[..n];
+    for row in must_have_rows {
+      assert!(upper_part.contains(row));
+    }
+    for row in forbidden_rows {
+      assert!(!upper_part.contains(row));
+    }
+  }
+
+  #[test]
+  fn test_restricted_maxvol() {
+    unsafe {
+      _test_restricted_maxvol::<f32>(      (120, 50), &[1, 5, 100, 118], &[44, 42, 76, 12, 9]);
+      _test_restricted_maxvol::<f64>(      (120, 50), &[1, 5, 100, 118], &[44, 42, 76, 12, 9]);
+      _test_restricted_maxvol::<Complex32>((120, 50), &[1, 5, 100, 118], &[44, 42, 76, 12, 9]);
+      _test_restricted_maxvol::<Complex64>((120, 50), &[1, 5, 100, 118], &[44, 42, 76, 12, 9]);
     }
   }
 }

@@ -96,6 +96,10 @@ reduction_ops_to_array!(mut,   reduce_prod,    |x: *mut T, y: *const T| *x = *x 
 reduction_ops_to_array!(const, reduce_prod,    |x: *mut T, y: *const T| *x = *x * *y        );
 reduction_ops_to_array!(mut,   reduce_abs_max, |x: *mut T, y: *const T| *x = max_abs(*x, *y));
 reduction_ops_to_array!(const, reduce_abs_max, |x: *mut T, y: *const T| *x = max_abs(*x, *y));
+reduction_ops_to_array!(mut,   reduce_min, |x: *mut T, y: *const T| *x = if (*x).re() < (*y).re() { *x } else { *y });
+reduction_ops_to_array!(const, reduce_min, |x: *mut T, y: *const T| *x = if (*x).re() < (*y).re() { *x } else { *y });
+reduction_ops_to_array!(mut,   reduce_max, |x: *mut T, y: *const T| *x = if (*x).re() > (*y).re() { *x } else { *y });
+reduction_ops_to_array!(const, reduce_max, |x: *mut T, y: *const T| *x = if (*x).re() > (*y).re() { *x } else { *y });
 
 macro_rules! trace {
   ($ptr_type:ident) => {

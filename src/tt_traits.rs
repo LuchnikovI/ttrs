@@ -63,6 +63,8 @@ pub enum TTError {
   ImpossibleToMoveLeft,
 
   EmptyTensorTrain,
+
+  Other(&'static str),
 }
 
 pub type TTResult<T> = Result<T, TTError>;
@@ -917,6 +919,25 @@ where
     }
     unsafe { self.set_orth_center_coordinate(None); }
     Ok(())
+  }
+
+  /// Returns tensor product of two Tensor Trains.
+  /// It also can be though as concatenation of two Tensor Trains
+  /// in a row.
+  #[inline]
+  fn tensordot(mut self, mut other: Self) -> Self {
+    let len = self.get_len() * other.get_len();
+    let mut mode_dims = Vec::with_capacity(len);
+    let mut kernels = vec![vec![]; len];
+    let mut bond_dims = Vec::with_capacity(len - 1);
+    for (i, (ker, right_bond, _, mode_dim)) in unsafe { self.iter_mut().chain(other.iter_mut()) }.enumerate() {
+      mode_dims.push(*mode_dim);
+      swap(&mut kernels[i], ker);
+      if i != len - 1 {
+        bond_dims.push(*right_bond);
+      }
+    }
+    unsafe { Self::build_from_raw_parts(mode_dims, bond_dims, kernels) }
   }
 
   /// TODO: make it more stable?

@@ -1,7 +1,11 @@
 use num_complex::ComplexFloat;
 //use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-use crate::NDArray;
+use crate::{
+  NDArray,
+  LinalgComplex,
+  LinalgReal,
+};
 
 pub(super) unsafe fn triangular_split<T: ComplexFloat + Send + Sync + 'static>(
   mut to_split: NDArray<*mut T, 2>,
@@ -43,6 +47,78 @@ pub(super) unsafe fn triangular_split<T: ComplexFloat + Send + Sync + 'static>(
      });
      to_split.shape[1] = n;
   }
+}
+
+pub(super) unsafe fn maxvol_priority<T>(
+  matrix: NDArray<*const T, 2>,
+  must_have_mask: Option<&[bool]>,
+  forbidden_mask: Option<&[bool]>,
+) -> (T, [usize; 2])
+where
+  T: LinalgComplex,
+  T::Real: LinalgReal,
+{
+  if let Some(mask) = must_have_mask {
+    let n = matrix.shape[1];
+    for (i, flag1) in mask[n..].into_iter().enumerate() {
+      if *flag1 {
+        for (j, flag2) in mask[..n].into_iter().enumerate() {
+          if !(*flag2) {
+            return (T::from(f64::MAX).unwrap(), [i, j])
+          }
+        }
+      }
+    }
+  }
+  if let Some(mask) = forbidden_mask {
+    let n = matrix.shape[1];
+    for (i, flag1) in mask[..n].into_iter().enumerate() {
+      if *flag1 {
+        for (j, flag2) in mask[n..].into_iter().enumerate() {
+          if !(*flag2) {
+            return (T::from(f64::MAX).unwrap(), [j, i])
+          }
+        }
+      }
+    }
+  }
+  let mut max = T::from(0).unwrap();
+  let mut argmax = [0, 0];
+  let row_stride = matrix.strides[0];
+  let col_stride = matrix.strides[1];
+  let n = matrix.shape[1];
+  for col in 0..matrix.shape[1] {
+    for row in 0..matrix.shape[0] {
+      let val = *matrix.ptr.add(row * row_stride + col * col_stride);
+      if val.abs() > max.abs() {
+        match (forbidden_mask, must_have_mask) {
+          (None, None) => {
+            max = val;
+            argmax = [row, col];
+          },
+          (Some(fmask), None) => {
+            if !fmask[row + n] && !fmask[col] {
+              max = val;
+              argmax = [row, col];
+            }
+          },
+          (None, Some(mmask)) => {
+            if !mmask[row + n] && !mmask[col] {
+              max = val;
+              argmax = [row, col];
+            }
+          },
+          (Some(fmask), Some(mmask)) => {
+            if !fmask[row + n] && !fmask[col] && !mmask[row + n] && !mmask[col] {
+              max = val;
+              argmax = [row, col];
+            }
+          },
+        }
+      }
+    }
+  }
+  (max, argmax)
 }
 
 /*#[cfg(test)]
